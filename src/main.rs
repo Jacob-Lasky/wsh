@@ -5,6 +5,7 @@ mod terminal;
 use bytes::Bytes;
 use std::io::{Read, Write};
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Error, Debug)]
@@ -36,14 +37,17 @@ async fn main() -> Result<(), WshError> {
     let pty = pty::Pty::spawn()?;
     tracing::info!("PTY spawned");
 
-    let pty_reader = pty.take_reader()?;
+    let mut pty_reader = pty.take_reader()?;
+    let mut pty_writer = pty.take_writer()?;
 
     let broker = broker::Broker::new();
     let broker_clone = broker.clone();
 
+    // Channel for input from all sources -> PTY writer
+    let (input_tx, mut input_rx) = mpsc::channel::<Bytes>(64);
+
     // PTY reader task: read from PTY, write to stdout, broadcast
     let pty_reader_handle = tokio::task::spawn_blocking(move || {
-        let mut pty_reader = pty_reader;
         let mut stdout = std::io::stdout();
         let mut buf = [0u8; 4096];
 
@@ -69,8 +73,54 @@ async fn main() -> Result<(), WshError> {
         }
     });
 
-    pty_reader_handle.await?;
-    tracing::info!("PTY reader finished");
+    // PTY writer task: receive from channel, write to PTY
+    let pty_writer_handle = tokio::task::spawn_blocking(move || {
+        while let Some(data) = input_rx.blocking_recv() {
+            if let Err(e) = pty_writer.write_all(&data) {
+                tracing::error!(?e, "PTY write error");
+                break;
+            }
+            let _ = pty_writer.flush();
+        }
+        tracing::debug!("PTY writer: channel closed");
+    });
 
+    // Stdin reader task: read from stdin, send to PTY writer channel
+    let stdin_tx = input_tx.clone();
+    let stdin_handle = tokio::task::spawn_blocking(move || {
+        let mut stdin = std::io::stdin();
+        let mut buf = [0u8; 1024];
+
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) => {
+                    tracing::debug!("stdin: EOF");
+                    break;
+                }
+                Ok(n) => {
+                    let data = Bytes::copy_from_slice(&buf[..n]);
+                    if stdin_tx.blocking_send(data).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(?e, "stdin read error");
+                    break;
+                }
+            }
+        }
+    });
+
+    // Wait for PTY reader to finish (shell exited)
+    pty_reader_handle.await?;
+
+    // Drop input_tx to signal PTY writer to stop
+    drop(input_tx);
+    let _ = pty_writer_handle.await;
+
+    // stdin_handle will exit when stdin closes or we exit
+    stdin_handle.abort();
+
+    tracing::info!("wsh exiting");
     Ok(())
 }
