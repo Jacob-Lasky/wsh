@@ -1365,11 +1365,13 @@ dependencies = [
 name = "wsh"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "bytes",
  "crossterm",
  "futures",
  "portable-pty",
+ "thiserror",
  "tokio",
  "tower-http",
  "tracing",
