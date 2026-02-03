@@ -1,4 +1,5 @@
 mod pty;
+mod terminal;
 
 use thiserror::Error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -7,6 +8,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 pub enum WshError {
     #[error("pty error: {0}")]
     Pty(#[from] pty::PtyError),
+
+    #[error("terminal error: {0}")]
+    Terminal(#[from] terminal::TerminalError),
 }
 
 #[tokio::main]
@@ -19,6 +23,9 @@ async fn main() -> Result<(), WshError> {
         .init();
 
     tracing::info!("wsh starting");
+
+    // Enable raw mode - guard restores on drop
+    let _raw_guard = terminal::RawModeGuard::new()?;
 
     let mut pty = pty::Pty::spawn()?;
     tracing::info!("PTY spawned");
