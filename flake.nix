@@ -21,6 +21,8 @@
           buildInputs = with pkgs; [
             rustToolchain
             pkg-config
+            curl
+            websocat
           ];
         };
       }
