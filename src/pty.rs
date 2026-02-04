@@ -72,3 +72,126 @@ impl Pty {
         Ok(self.child.wait()?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    /// Helper to read from PTY with a timeout to avoid blocking forever.
+    /// Returns the bytes read, or an empty vec if timeout occurred.
+    fn read_with_timeout(
+        mut reader: Box<dyn Read + Send>,
+        timeout: Duration,
+    ) -> Vec<u8> {
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let mut buf = vec![0u8; 4096];
+            let mut collected = Vec::new();
+
+            // Read in a loop until we get some data or error
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        collected.extend_from_slice(&buf[..n]);
+                        // Send what we have so far
+                        let _ = tx.send(collected.clone());
+                        // Keep reading a bit more in case there's more output
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Wait for data with timeout
+        rx.recv_timeout(timeout).unwrap_or_default()
+    }
+
+    #[test]
+    fn test_spawn_creates_pty() {
+        let pty = Pty::spawn(24, 80);
+        assert!(pty.is_ok(), "Failed to spawn PTY: {:?}", pty.err());
+    }
+
+    #[test]
+    fn test_take_reader_returns_handle() {
+        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let reader = pty.take_reader();
+        assert!(reader.is_ok(), "Failed to get reader: {:?}", reader.err());
+    }
+
+    #[test]
+    fn test_take_writer_returns_handle() {
+        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let writer = pty.take_writer();
+        assert!(writer.is_ok(), "Failed to get writer: {:?}", writer.err());
+    }
+
+    #[test]
+    fn test_write_and_read_roundtrip() {
+        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let mut writer = pty.take_writer().expect("Failed to get writer");
+        let reader = pty.take_reader().expect("Failed to get reader");
+
+        // Write a simple echo command
+        // Use a unique marker to identify our output
+        let marker = "WSH_TEST_12345";
+        let cmd = format!("echo {}\n", marker);
+        writer.write_all(cmd.as_bytes()).expect("Write failed");
+        writer.flush().expect("Flush failed");
+
+        // Read with timeout
+        let output = read_with_timeout(reader, Duration::from_secs(2));
+
+        // Convert to string and check for our marker
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            output_str.contains(marker),
+            "Expected output to contain '{}', but got: {}",
+            marker,
+            output_str
+        );
+    }
+
+    #[test]
+    fn test_resize_succeeds() {
+        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+
+        // Resize to different dimensions
+        let result = pty.resize(40, 120);
+        assert!(result.is_ok(), "Failed to resize PTY: {:?}", result.err());
+
+        // Resize again to confirm it works multiple times
+        let result = pty.resize(25, 100);
+        assert!(result.is_ok(), "Failed to resize PTY second time: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_multiple_readers_can_be_cloned() {
+        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+
+        // Should be able to clone multiple readers
+        let reader1 = pty.take_reader();
+        let reader2 = pty.take_reader();
+
+        assert!(reader1.is_ok(), "Failed to get first reader");
+        assert!(reader2.is_ok(), "Failed to get second reader");
+    }
+
+    #[test]
+    fn test_spawn_with_various_dimensions() {
+        // Test with minimum dimensions
+        let pty_small = Pty::spawn(1, 1);
+        assert!(pty_small.is_ok(), "Failed to spawn PTY with 1x1 dimensions");
+
+        // Test with larger dimensions
+        let pty_large = Pty::spawn(100, 200);
+        assert!(pty_large.is_ok(), "Failed to spawn PTY with 100x200 dimensions");
+    }
+}
