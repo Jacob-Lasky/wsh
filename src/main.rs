@@ -1,10 +1,25 @@
+//! wsh - The Web Shell
+//!
+//! A transparent PTY wrapper that exposes terminal I/O via HTTP/WebSocket API.
+//!
+//! Architecture:
+//! - stdin reader: Dedicated thread reading from stdin, sends to input channel
+//! - PTY writer: Dedicated thread receiving from input channel, writes to PTY
+//! - PTY reader: Dedicated thread reading from PTY, writes to stdout and broadcasts
+//! - HTTP/WebSocket server: Async, receives input via API, sends to input channel
+//! - Child monitor: Watches for shell process exit
+//!
+//! Shutdown: When the shell exits (detected via child monitor or PTY reader EOF),
+//! we restore terminal state and call process::exit(). This is necessary because
+//! the stdin reader thread is blocked on read() and cannot be cancelled.
+
 use bytes::Bytes;
-use wsh::{api, broker, pty, terminal};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use wsh::{api, broker, pty, shutdown::ShutdownCoordinator, terminal};
 
 #[derive(Error, Debug)]
 pub enum WshError {
@@ -22,176 +37,175 @@ pub enum WshError {
 async fn main() -> Result<(), WshError> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "wsh=debug,tower_http=debug".into()),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "wsh=info,tower_http=info".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
     tracing::info!("wsh starting");
 
-    // Enable raw mode - guard restores on drop
-    let _raw_guard = terminal::RawModeGuard::new()?;
+    // Enable raw mode so we receive all keystrokes (including Ctrl+C, etc.)
+    // The guard restores normal mode when dropped
+    let raw_guard = terminal::RawModeGuard::new()?;
 
     let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
-    tracing::info!(rows, cols, "Terminal size");
-    let mut pty = pty::Pty::spawn(rows, cols)?;
-    tracing::info!("PTY spawned");
+    tracing::debug!(rows, cols, "terminal size");
 
-    let mut pty_reader = pty.take_reader()?;
-    let mut pty_writer = pty.take_writer()?;
+    let mut pty = pty::Pty::spawn(rows, cols)?;
+    tracing::debug!("PTY spawned");
+
+    let pty_reader = pty.take_reader()?;
+    let pty_writer = pty.take_writer()?;
     let mut pty_child = pty.take_child().expect("child process");
 
     // Channel to signal when child process exits
-    let (child_exit_tx, mut child_exit_rx) = tokio::sync::oneshot::channel::<()>();
+    let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
 
-    // Child process monitor task
-    let _child_monitor_handle = tokio::task::spawn_blocking(move || {
-        tracing::debug!("Child monitor task started");
+    // Child process monitor: detects when shell exits
+    tokio::task::spawn_blocking(move || {
         match pty_child.wait() {
-            Ok(status) => {
-                tracing::info!(?status, "Shell process exited");
-            }
-            Err(e) => {
-                tracing::error!(?e, "Error waiting for shell process");
-            }
+            Ok(status) => tracing::debug!(?status, "shell exited"),
+            Err(e) => tracing::error!(?e, "error waiting for shell"),
         }
         let _ = child_exit_tx.send(());
-        tracing::debug!("Child monitor task exiting");
     });
 
     let broker = broker::Broker::new();
-    let broker_clone = broker.clone();
 
-    // Channel for input from all sources -> PTY writer
-    let (input_tx, mut input_rx) = mpsc::channel::<Bytes>(64);
+    // Channel for input from all sources (stdin, HTTP, WebSocket) -> PTY writer
+    let (input_tx, input_rx) = mpsc::channel::<Bytes>(64);
 
-    // PTY reader task: read from PTY, write to stdout, broadcast
-    let mut pty_reader_handle = tokio::task::spawn_blocking(move || {
-        tracing::debug!("PTY reader task started");
-        let mut stdout = std::io::stdout();
-        let mut buf = [0u8; 4096];
+    // Shutdown coordinator for graceful client disconnection
+    let shutdown = ShutdownCoordinator::new();
 
-        loop {
-            match pty_reader.read(&mut buf) {
-                Ok(0) => {
-                    tracing::debug!("PTY reader: EOF - shell likely exited");
-                    break;
-                }
-                Ok(n) => {
-                    let data = Bytes::copy_from_slice(&buf[..n]);
-                    // Write to stdout
-                    let _ = stdout.write_all(&data);
-                    let _ = stdout.flush();
-                    // Broadcast to subscribers
-                    broker_clone.publish(data);
-                }
-                Err(e) => {
-                    tracing::error!(?e, "PTY read error - shell may have exited");
-                    break;
-                }
-            }
-        }
-        tracing::debug!("PTY reader task exiting");
-    });
+    // Spawn I/O tasks
+    let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone());
+    spawn_pty_writer(pty_writer, input_rx);
+    spawn_stdin_reader(input_tx.clone());
 
-    // PTY writer task: receive from channel, write to PTY
-    let _pty_writer_handle = tokio::task::spawn_blocking(move || {
-        tracing::debug!("PTY writer task started");
-        while let Some(data) = input_rx.blocking_recv() {
-            tracing::debug!(
-                bytes = data.len(),
-                data_hex = ?data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>(),
-                "PTY writer: writing to PTY"
-            );
-            if let Err(e) = pty_writer.write_all(&data) {
-                tracing::error!(?e, "PTY write error");
-                break;
-            }
-            let _ = pty_writer.flush();
-        }
-        tracing::debug!("PTY writer: channel closed, task exiting");
-    });
-
-    // Stdin reader task: read from stdin, send to PTY writer channel
-    let stdin_tx = input_tx.clone();
-    let _stdin_handle = tokio::task::spawn_blocking(move || {
-        let mut stdin = std::io::stdin();
-        let mut buf = [0u8; 1024];
-
-        loop {
-            match stdin.read(&mut buf) {
-                Ok(0) => {
-                    tracing::debug!("stdin: EOF - stdin reader exiting");
-                    break;
-                }
-                Ok(n) => {
-                    let data = Bytes::copy_from_slice(&buf[..n]);
-                    // Log what we're reading from stdin (useful for debugging Ctrl+D issues)
-                    tracing::debug!(
-                        bytes = n,
-                        data_hex = ?buf[..n].iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>(),
-                        "stdin: read data"
-                    );
-                    if stdin_tx.blocking_send(data).is_err() {
-                        tracing::debug!("stdin: channel closed, exiting");
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(?e, "stdin read error");
-                    break;
-                }
-            }
-        }
-        tracing::debug!("stdin reader task exiting");
-    });
-
-    // Axum server
+    // Start API server
     let state = api::AppState {
-        input_tx: input_tx.clone(),
+        input_tx,
         output_rx: broker.sender(),
+        shutdown: shutdown.clone(),
     };
     let app = api::router(state);
     let addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket address");
     tracing::info!(%addr, "API server listening");
 
-    let _server_handle = tokio::spawn(async move {
+    tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
     });
 
-    // Signal handling for graceful shutdown
+    // Wait for exit condition
+    wait_for_exit(child_exit_rx, pty_reader_handle).await;
+
+    // Gracefully shut down connected clients
+    let active = shutdown.active_count();
+    if active > 0 {
+        tracing::info!(active, "signaling clients to disconnect");
+        shutdown.shutdown();
+        shutdown.wait_for_all_closed().await;
+        tracing::debug!("all clients disconnected");
+    }
+
+    // Restore terminal and exit
+    // Note: We use process::exit() because the stdin reader thread is blocked
+    // on read() and cannot be cancelled. This is standard for terminal applications.
+    tracing::info!("wsh exiting");
+    drop(raw_guard);
+    std::process::exit(0)
+}
+
+/// Spawn the PTY reader task.
+/// Reads from PTY, writes to stdout, and broadcasts to subscribers.
+fn spawn_pty_reader(
+    mut reader: Box<dyn Read + Send>,
+    broker: broker::Broker,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
+        let mut stdout = std::io::stdout();
+        let mut buf = [0u8; 4096];
+
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => {
+                    tracing::debug!("PTY reader: EOF");
+                    break;
+                }
+                Ok(n) => {
+                    let data = Bytes::copy_from_slice(&buf[..n]);
+                    let _ = stdout.write_all(&data);
+                    let _ = stdout.flush();
+                    broker.publish(data);
+                }
+                Err(e) => {
+                    tracing::debug!(?e, "PTY reader: error");
+                    break;
+                }
+            }
+        }
+    })
+}
+
+/// Spawn the PTY writer task.
+/// Receives input from channel and writes to PTY.
+fn spawn_pty_writer(mut writer: Box<dyn Write + Send>, mut input_rx: mpsc::Receiver<Bytes>) {
+    tokio::task::spawn_blocking(move || {
+        while let Some(data) = input_rx.blocking_recv() {
+            if let Err(e) = writer.write_all(&data) {
+                tracing::debug!(?e, "PTY writer: error");
+                break;
+            }
+            let _ = writer.flush();
+        }
+    });
+}
+
+/// Spawn the stdin reader task.
+/// Reads from stdin and sends to the input channel.
+fn spawn_stdin_reader(input_tx: mpsc::Sender<Bytes>) {
+    tokio::task::spawn_blocking(move || {
+        let mut stdin = std::io::stdin();
+        let mut buf = [0u8; 1024];
+
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = Bytes::copy_from_slice(&buf[..n]);
+                    if input_tx.blocking_send(data).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+/// Wait for an exit condition: child exit, PTY reader EOF, or Ctrl+C.
+async fn wait_for_exit(
+    mut child_exit_rx: tokio::sync::oneshot::Receiver<()>,
+    mut pty_reader_handle: tokio::task::JoinHandle<()>,
+) {
     let shutdown = async {
         tokio::signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
-        tracing::info!("Received Ctrl+C, shutting down");
+        tracing::info!("received Ctrl+C");
     };
 
-    // Wait for either: child process to exit, PTY reader to finish, OR shutdown signal
     tokio::select! {
         _ = &mut child_exit_rx => {
-            tracing::info!("Child process exited, shutting down");
-            pty_reader_handle.abort();
+            tracing::debug!("child process exited");
         }
-        result = &mut pty_reader_handle => {
-            match result {
-                Ok(()) => tracing::info!("PTY reader finished"),
-                Err(e) => tracing::error!(?e, "PTY reader task failed"),
-            }
+        _ = &mut pty_reader_handle => {
+            tracing::debug!("PTY reader finished");
         }
         _ = shutdown => {
-            tracing::info!("Shutdown signal received");
-            pty_reader_handle.abort();
+            tracing::debug!("shutdown signal");
         }
     }
-
-    // Note: spawn_blocking tasks (stdin reader) can't be cancelled if blocked
-    // on I/O. Since stdin.read() blocks until input, we must forcefully exit
-    // when the shell exits to avoid hanging.
-    //
-    // We must manually restore terminal state since exit() bypasses destructors.
-    tracing::info!("wsh exiting");
-    drop(_raw_guard);
-    std::process::exit(0)
 }

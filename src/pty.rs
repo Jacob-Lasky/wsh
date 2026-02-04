@@ -81,10 +81,7 @@ impl Pty {
     pub fn wait(&mut self) -> Result<portable_pty::ExitStatus, PtyError> {
         match &mut self.child {
             Some(child) => Ok(child.wait()?),
-            None => Err(PtyError::Wait(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "child already taken",
-            ))),
+            None => Err(PtyError::Wait(std::io::Error::other("child already taken"))),
         }
     }
 }

@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use wsh::{api, broker::Broker, pty::Pty};
+use wsh::{api, broker::Broker, pty::Pty, shutdown::ShutdownCoordinator};
 
 async fn start_server(app: axum::Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -68,6 +68,7 @@ async fn test_concurrent_input_from_multiple_sources() {
     let state = api::AppState {
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;
@@ -205,6 +206,7 @@ async fn test_rapid_http_requests() {
     let state = api::AppState {
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;

@@ -1,6 +1,6 @@
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
         State,
     },
     http::StatusCode,
@@ -13,10 +13,13 @@ use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 
+use crate::shutdown::ShutdownCoordinator;
+
 #[derive(Clone)]
 pub struct AppState {
     pub input_tx: mpsc::Sender<Bytes>,
     pub output_rx: broadcast::Sender<Bytes>,
+    pub shutdown: ShutdownCoordinator,
 }
 
 #[derive(Serialize)]
@@ -43,50 +46,66 @@ async fn ws_raw(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl Int
 }
 
 async fn handle_ws_raw(socket: WebSocket, state: AppState) {
+    // Register this connection for graceful shutdown tracking
+    let (_guard, mut shutdown_rx) = state.shutdown.register();
+
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     let mut output_rx = state.output_rx.subscribe();
     let input_tx = state.input_tx.clone();
 
-    // Task: broadcast PTY output -> WebSocket
-    let mut tx_task = tokio::spawn(async move {
-        while let Ok(data) = output_rx.recv().await {
-            if ws_tx.send(Message::Binary(data.to_vec())).await.is_err() {
-                break;
+    // Main loop: handle PTY output, WebSocket input, and shutdown signal
+    loop {
+        tokio::select! {
+            // PTY output -> WebSocket
+            result = output_rx.recv() => {
+                match result {
+                    Ok(data) => {
+                        if ws_tx.send(Message::Binary(data.to_vec())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                }
             }
-        }
-    });
 
-    // Task: WebSocket input -> PTY
-    let mut rx_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_rx.next().await {
-            let data = match msg {
-                Message::Binary(data) => Bytes::from(data),
-                Message::Text(text) => Bytes::from(text),
-                Message::Close(_) => break,
-                _ => continue,
-            };
-            if input_tx.send(data).await.is_err() {
-                break;
+            // WebSocket input -> PTY
+            msg = ws_rx.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        if input_tx.send(Bytes::from(data)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        if input_tx.send(Bytes::from(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => continue, // Ping/Pong handled automatically
+                    Some(Err(_)) => break,
+                }
             }
-        }
-    });
 
-    // Wait for either task to finish, then cleanup the other
-    tokio::select! {
-        result = &mut tx_task => {
-            if let Err(e) = result {
-                tracing::debug!("WebSocket tx task ended: {:?}", e);
+            // Shutdown signal
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    tracing::debug!("WebSocket received shutdown signal, closing");
+                    // Send close frame to client
+                    let close_frame = CloseFrame {
+                        code: axum::extract::ws::close_code::NORMAL,
+                        reason: "server shutting down".into(),
+                    };
+                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+                    break;
+                }
             }
-            rx_task.abort();
-        }
-        result = &mut rx_task => {
-            if let Err(e) = result {
-                tracing::debug!("WebSocket rx task ended: {:?}", e);
-            }
-            tx_task.abort();
         }
     }
+
+    // _guard is dropped here, decrementing active connection count
 }
 
 pub fn router(state: AppState) -> Router {
@@ -115,6 +134,7 @@ mod tests {
         let state = AppState {
             input_tx,
             output_rx: output_tx,
+            shutdown: ShutdownCoordinator::new(),
         };
         (state, input_rx)
     }

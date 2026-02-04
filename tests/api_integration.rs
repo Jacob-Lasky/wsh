@@ -19,6 +19,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tower::ServiceExt;
 use wsh::api::{router, AppState};
+use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test application with channels for input/output.
 /// Returns the router, input receiver, and output sender for test verification.
@@ -28,6 +29,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
+        shutdown: ShutdownCoordinator::new(),
     };
     (router(state), input_rx, output_tx)
 }
@@ -101,6 +103,7 @@ async fn test_api_input_multiple_requests() {
     let state = AppState {
         input_tx,
         output_rx: output_tx,
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = router(state);
 
@@ -170,6 +173,7 @@ async fn test_websocket_receives_pty_output() {
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = router(state);
 
@@ -212,6 +216,7 @@ async fn test_websocket_sends_input_to_pty() {
     let state = AppState {
         input_tx,
         output_rx: output_tx,
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = router(state);
 
@@ -250,6 +255,7 @@ async fn test_websocket_text_input_to_pty() {
     let state = AppState {
         input_tx,
         output_rx: output_tx,
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = router(state);
 
@@ -286,6 +292,7 @@ async fn test_websocket_bidirectional_communication() {
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = router(state);
 
@@ -341,6 +348,7 @@ async fn test_websocket_multiple_outputs() {
     let state = AppState {
         input_tx,
         output_rx: output_tx.clone(),
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = router(state);
 

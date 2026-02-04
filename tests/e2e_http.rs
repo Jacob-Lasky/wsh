@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use wsh::{api, broker::Broker, pty::Pty};
+use wsh::{api, broker::Broker, pty::Pty, shutdown::ShutdownCoordinator};
 
 /// Starts an HTTP server and returns its address
 async fn start_server(app: axum::Router) -> SocketAddr {
@@ -76,6 +76,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
     let state = api::AppState {
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;
