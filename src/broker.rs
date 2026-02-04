@@ -22,6 +22,10 @@ impl Broker {
     pub fn subscribe(&self) -> broadcast::Receiver<Bytes> {
         self.tx.subscribe()
     }
+
+    pub fn sender(&self) -> broadcast::Sender<Bytes> {
+        self.tx.clone()
+    }
 }
 
 impl Default for Broker {

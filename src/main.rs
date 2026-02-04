@@ -116,6 +116,7 @@ async fn main() -> Result<(), WshError> {
     // Axum server
     let state = api::AppState {
         input_tx: input_tx.clone(),
+        output_rx: broker.sender(),
     };
     let app = api::router(state);
     let addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket address");
