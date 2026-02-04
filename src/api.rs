@@ -72,10 +72,20 @@ async fn handle_ws_raw(socket: WebSocket, state: AppState) {
         }
     });
 
-    // Wait for either task to finish, then abort the other
+    // Wait for either task to finish, then cleanup the other
     tokio::select! {
-        _ = &mut tx_task => rx_task.abort(),
-        _ = &mut rx_task => tx_task.abort(),
+        result = &mut tx_task => {
+            if let Err(e) = result {
+                tracing::debug!("WebSocket tx task ended: {:?}", e);
+            }
+            rx_task.abort();
+        }
+        result = &mut rx_task => {
+            if let Err(e) = result {
+                tracing::debug!("WebSocket rx task ended: {:?}", e);
+            }
+            tx_task.abort();
+        }
     }
 }
 
