@@ -132,14 +132,20 @@ fn test_full_pty_roundtrip_with_broker() {
     let stop_flag = Arc::new(AtomicBool::new(false));
     let _reader_handle = read_pty_and_publish(reader, broker.clone(), stop_flag.clone());
 
-    // Spawn thread to receive from channel and write to PTY
+    // Spawn thread to receive from channel and write to PTY.
+    // Use a longer timeout than the test's collection phase to ensure we can receive the exit command.
+    // When the channel closes or times out, send "exit" to cleanly shut down the shell.
     let writer_handle = thread::spawn(move || {
-        while let Ok(data) = input_rx.recv_timeout(Duration::from_secs(3)) {
+        while let Ok(data) = input_rx.recv_timeout(Duration::from_secs(10)) {
             if pty_writer.write_all(&data).is_err() {
                 break;
             }
             let _ = pty_writer.flush();
         }
+        // Always try to send exit when done to close the shell gracefully.
+        // This ensures the PTY reader thread gets EOF/EIO and can exit.
+        let _ = pty_writer.write_all(b"exit\n");
+        let _ = pty_writer.flush();
     });
 
     // Give threads time to start
@@ -187,10 +193,9 @@ fn test_full_pty_roundtrip_with_broker() {
         output_str
     );
 
-    // Clean up
+    // Clean up: drop the input channel to signal the writer thread to exit.
+    // The writer thread will send "exit" to the shell on its way out.
     stop_flag.store(true, Ordering::Relaxed);
-    // Send exit to close PTY gracefully
-    input_tx.send(Bytes::from("exit\n")).ok();
     drop(input_tx);
     let _ = writer_handle.join();
 }
