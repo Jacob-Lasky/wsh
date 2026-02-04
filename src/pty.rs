@@ -25,7 +25,7 @@ pub enum PtyError {
 
 pub struct Pty {
     pair: PtyPair,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
 }
 
 impl Pty {
@@ -44,11 +44,17 @@ impl Pty {
         // Use $SHELL or fall back to /bin/sh
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
+
+        // Force interactive mode - necessary for proper readline/job control
+        // when the shell doesn't auto-detect the PTY as interactive
+        cmd.arg("-i");
+
+        // Set TERM for proper terminal handling
         cmd.env("TERM", std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()));
 
         let child = pair.slave.spawn_command(cmd).map_err(PtyError::SpawnCommand)?;
 
-        Ok(Self { pair, child })
+        Ok(Self { pair, child: Some(child) })
     }
 
     pub fn take_reader(&self) -> Result<Box<dyn Read + Send>, PtyError> {
@@ -68,8 +74,18 @@ impl Pty {
         }).map_err(PtyError::Resize)
     }
 
+    pub fn take_child(&mut self) -> Option<Box<dyn portable_pty::Child + Send + Sync>> {
+        self.child.take()
+    }
+
     pub fn wait(&mut self) -> Result<portable_pty::ExitStatus, PtyError> {
-        Ok(self.child.wait()?)
+        match &mut self.child {
+            Some(child) => Ok(child.wait()?),
+            None => Err(PtyError::Wait(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "child already taken",
+            ))),
+        }
     }
 }
 
