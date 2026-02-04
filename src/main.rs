@@ -1,9 +1,11 @@
+mod api;
 mod broker;
 mod pty;
 mod terminal;
 
 use bytes::Bytes;
 use std::io::{Read, Write};
+use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -111,6 +113,16 @@ async fn main() -> Result<(), WshError> {
         }
     });
 
+    // Axum server
+    let app = api::router();
+    let addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket address");
+    tracing::info!(%addr, "API server listening");
+
+    let server_handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+
     // Wait for PTY reader to finish (shell exited)
     pty_reader_handle.await?;
 
@@ -120,6 +132,9 @@ async fn main() -> Result<(), WshError> {
 
     // stdin_handle will exit when stdin closes or we exit
     stdin_handle.abort();
+
+    // Stop the API server
+    server_handle.abort();
 
     tracing::info!("wsh exiting");
     Ok(())
