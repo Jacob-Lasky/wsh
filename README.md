@@ -125,7 +125,7 @@ Now any output in Terminal 1 streams to Terminal 3, and typing in Terminal 3 sen
 │                                                             │
 │  ┌──────────┐    ┌──────────┐    ┌───────────────────────┐  │
 │  │   PTY    │───▶│  Broker  │───▶│    HTTP/WS Server     │  │
-│  │ (shell)  │    │(broadcast)│    │  :3000                │  │
+│  │ (shell)  │    │(broadcast)│    │  :8080                │  │
 │  │          │◀───│          │◀───│  /health              │  │
 │  └──────────┘    └──────────┘    │  /input               │  │
 │       ▲                          │  /ws/raw              │  │
