@@ -10,9 +10,13 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::parser::{
+    state::{Format, Query},
+    Parser,
+};
 use crate::shutdown::ShutdownCoordinator;
 
 #[derive(Clone)]
@@ -20,6 +24,7 @@ pub struct AppState {
     pub input_tx: mpsc::Sender<Bytes>,
     pub output_rx: broadcast::Sender<Bytes>,
     pub shutdown: ShutdownCoordinator,
+    pub parser: Parser,
 }
 
 #[derive(Serialize)]
@@ -108,11 +113,73 @@ async fn handle_ws_raw(socket: WebSocket, state: AppState) {
     // _guard is dropped here, decrementing active connection count
 }
 
+#[derive(Deserialize)]
+struct ScreenQuery {
+    #[serde(default)]
+    format: Format,
+}
+
+async fn screen(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<ScreenQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let response = state
+        .parser
+        .query(Query::Screen { format: params.format })
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+struct ScrollbackQuery {
+    #[serde(default)]
+    format: Format,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+fn default_limit() -> usize {
+    100
+}
+
+async fn scrollback(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<ScrollbackQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let response = state
+        .parser
+        .query(Query::Scrollback {
+            format: params.format,
+            offset: params.offset,
+            limit: params.limit,
+        })
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    Ok(Json(response))
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/input", post(input))
         .route("/ws/raw", get(ws_raw))
+        .route("/screen", get(screen))
+        .route("/scrollback", get(scrollback))
         .with_state(state)
 }
 
