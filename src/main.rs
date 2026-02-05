@@ -14,12 +14,25 @@
 //! the stdin reader thread is blocked on read() and cannot be cancelled.
 
 use bytes::Bytes;
+use clap::Parser as ClapParser;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wsh::{api, broker, parser::Parser, pty, shutdown::ShutdownCoordinator, terminal};
+
+/// wsh - The Web Shell
+///
+/// A transparent PTY wrapper that exposes terminal I/O via HTTP/WebSocket API.
+/// Run your shell inside wsh to access it from web browsers, agents, and other tools.
+#[derive(ClapParser, Debug)]
+#[command(name = "wsh", version, about, long_about = None)]
+struct Args {
+    /// Address to bind the HTTP/WebSocket API server
+    #[arg(long, default_value = "127.0.0.1:8080")]
+    bind: SocketAddr,
+}
 
 #[derive(Error, Debug)]
 pub enum WshError {
@@ -35,6 +48,8 @@ pub enum WshError {
 
 #[tokio::main]
 async fn main() -> Result<(), WshError> {
+    let args = Args::parse();
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| "wsh=info,tower_http=info".into()),
@@ -94,11 +109,11 @@ async fn main() -> Result<(), WshError> {
         parser: parser.clone(),
     };
     let app = api::router(state);
-    let addr: SocketAddr = "127.0.0.1:8080".parse().expect("valid socket address");
-    tracing::info!(%addr, "API server listening");
+    tracing::info!(addr = %args.bind, "API server listening");
 
+    let bind_addr = args.bind;
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(bind_addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
     });
 
