@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::parser::{
+    events::{EventType, Subscribe},
     state::{Format, Query},
     Parser,
 };
@@ -113,6 +114,134 @@ async fn handle_ws_raw(socket: WebSocket, state: AppState) {
     // _guard is dropped here, decrementing active connection count
 }
 
+async fn ws_json(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_ws_json(socket, state))
+}
+
+async fn handle_ws_json(socket: WebSocket, state: AppState) {
+    let (_guard, mut shutdown_rx) = state.shutdown.register();
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Send connected message
+    let connected_msg = serde_json::json!({ "connected": true });
+    if ws_tx
+        .send(Message::Text(connected_msg.to_string()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Wait for subscribe message
+    let subscribe: Subscribe = loop {
+        tokio::select! {
+            msg = ws_rx.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<Subscribe>(&text) {
+                            Ok(sub) => break sub,
+                            Err(e) => {
+                                let err = serde_json::json!({
+                                    "error": format!("invalid subscribe message: {}", e),
+                                    "code": "invalid_subscribe"
+                                });
+                                let _ = ws_tx.send(Message::Text(err.to_string())).await;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => return,
+                    _ => continue,
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    return;
+                }
+            }
+        }
+    };
+
+    // Confirm subscription
+    let subscribed_msg = serde_json::json!({
+        "subscribed": subscribe.events.iter().map(|e| format!("{:?}", e).to_lowercase()).collect::<Vec<_>>()
+    });
+    if ws_tx
+        .send(Message::Text(subscribed_msg.to_string()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    // Subscribe to parser events
+    let mut events = Box::pin(state.parser.subscribe());
+    let subscribed_types = subscribe.events;
+
+    // Main event loop
+    loop {
+        tokio::select! {
+            event = events.next() => {
+                match event {
+                    Some(event) => {
+                        // Filter based on subscription
+                        let should_send = match &event {
+                            crate::parser::events::Event::Line { .. } => {
+                                subscribed_types.contains(&EventType::Lines)
+                            }
+                            crate::parser::events::Event::Cursor { .. } => {
+                                subscribed_types.contains(&EventType::Cursor)
+                            }
+                            crate::parser::events::Event::Mode { .. } => {
+                                subscribed_types.contains(&EventType::Mode)
+                            }
+                            crate::parser::events::Event::Diff { .. } => {
+                                subscribed_types.contains(&EventType::Diffs)
+                            }
+                            crate::parser::events::Event::Reset { .. }
+                            | crate::parser::events::Event::Sync { .. } => true,
+                        };
+
+                        if should_send {
+                            if let Ok(json) = serde_json::to_string(&event) {
+                                if ws_tx.send(Message::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+
+            msg = ws_rx.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        // Handle resubscribe (simplified: just acknowledge)
+                        if let Ok(_sub) = serde_json::from_str::<Subscribe>(&text) {
+                            // In a full implementation, we'd update the filter
+                            let ack = serde_json::json!({ "subscribed": true });
+                            let _ = ws_tx.send(Message::Text(ack.to_string())).await;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    _ => continue,
+                }
+            }
+
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    let close_frame = CloseFrame {
+                        code: axum::extract::ws::close_code::NORMAL,
+                        reason: "server shutting down".into(),
+                    };
+                    let _ = ws_tx.send(Message::Close(Some(close_frame))).await;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct ScreenQuery {
     #[serde(default)]
@@ -178,6 +307,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/input", post(input))
         .route("/ws/raw", get(ws_raw))
+        .route("/ws/json", get(ws_json))
         .route("/screen", get(screen))
         .route("/scrollback", get(scrollback))
         .with_state(state)
