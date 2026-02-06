@@ -38,12 +38,14 @@ pub async fn run(
                         drop(changes);
 
                         // Emit line events for changed lines
+                        let total_lines = vt.lines().count();
                         for line_idx in changed_lines {
                             if let Some(line) = vt.lines().nth(line_idx) {
                                 seq += 1;
                                 let _ = event_tx.send(Event::Line {
                                     seq,
                                     index: line_idx,
+                                    total_lines,
                                     line: format_line(line, true),
                                 });
                             }

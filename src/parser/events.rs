@@ -8,6 +8,7 @@ pub enum Event {
     Line {
         seq: u64,
         index: usize,
+        total_lines: usize,
         line: FormattedLine,
     },
     Cursor {

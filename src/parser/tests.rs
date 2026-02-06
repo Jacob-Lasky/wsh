@@ -145,3 +145,30 @@ async fn test_parser_event_stream() {
 
     assert!(event.is_ok(), "should receive an event");
 }
+
+#[tokio::test]
+async fn test_line_event_includes_total_lines() {
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+
+    let mut events = parser.subscribe();
+
+    // Send text to trigger a line event
+    broker.publish(bytes::Bytes::from("Hello"));
+
+    // Get the line event
+    let event = tokio::time::timeout(
+        tokio::time::Duration::from_millis(100),
+        events.next(),
+    )
+    .await
+    .expect("should receive event")
+    .expect("stream should have item");
+
+    match event {
+        Event::Line { total_lines, .. } => {
+            assert!(total_lines >= 24, "total_lines should be at least screen height");
+        }
+        _ => panic!("expected Line event, got {:?}", event),
+    }
+}
