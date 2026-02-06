@@ -1,5 +1,7 @@
 # Line Indexing Design
 
+**Status:** Implemented
+
 > Enable clients to interpret line indices relative to buffer state
 
 ## Problem
