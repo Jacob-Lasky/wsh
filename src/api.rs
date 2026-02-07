@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::parser::{
-    events::{EventType, Subscribe},
-    state::{Format, Query},
+    events::{Event, EventType, Subscribe},
+    state::{Format, Query, QueryResponse},
     Parser,
 };
 use crate::shutdown::ShutdownCoordinator;
@@ -178,6 +178,27 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
         .is_err()
     {
         return;
+    }
+
+    // Send initial Sync event with current screen state
+    if let Ok(QueryResponse::Screen(screen)) = state
+        .parser
+        .query(Query::Screen {
+            format: subscribe.format,
+        })
+        .await
+    {
+        let scrollback_lines = screen.total_lines;
+        let sync_event = Event::Sync {
+            seq: 0,
+            screen,
+            scrollback_lines,
+        };
+        if let Ok(json) = serde_json::to_string(&sync_event) {
+            if ws_tx.send(Message::Text(json)).await.is_err() {
+                return;
+            }
+        }
     }
 
     // Subscribe to parser events
