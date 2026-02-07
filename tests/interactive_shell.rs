@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use wsh::pty::Pty;
+use wsh::pty::{Pty, SpawnCommand};
 
 /// Helper to read from PTY until we find expected content or timeout.
 /// Sends "exit" to the shell before returning to ensure clean shutdown.
@@ -74,7 +74,7 @@ fn read_until_or_timeout(
 /// but not execute commands.
 #[test]
 fn test_shell_executes_commands_and_produces_output() {
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let mut writer = pty.take_writer().expect("Failed to get writer");
     let reader = pty.take_reader().expect("Failed to get reader");
 
@@ -106,7 +106,7 @@ fn test_shell_executes_commands_and_produces_output() {
 /// doesn't fully initialize, but as long as commands execute, this is cosmetic.
 #[test]
 fn test_shell_shows_prompt() {
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let writer = pty.take_writer().expect("Failed to get writer");
     let reader = pty.take_reader().expect("Failed to get reader");
 

@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, parser::Parser, pty, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -32,6 +32,14 @@ struct Args {
     /// Address to bind the HTTP/WebSocket API server
     #[arg(long, default_value = "127.0.0.1:8080")]
     bind: SocketAddr,
+
+    /// Command string to execute (like sh -c)
+    #[arg(short = 'c')]
+    command: Option<String>,
+
+    /// Force interactive mode
+    #[arg(short = 'i')]
+    interactive: bool,
 }
 
 #[derive(Error, Debug)]
@@ -66,7 +74,18 @@ async fn main() -> Result<(), WshError> {
     let (rows, cols) = terminal::terminal_size().unwrap_or((24, 80));
     tracing::debug!(rows, cols, "terminal size");
 
-    let mut pty = pty::Pty::spawn(rows, cols)?;
+    // Determine what command to spawn based on CLI args
+    let spawn_cmd = match &args.command {
+        Some(cmd) => SpawnCommand::Command {
+            command: cmd.clone(),
+            interactive: args.interactive,
+        },
+        None => SpawnCommand::Shell {
+            interactive: args.interactive,
+        },
+    };
+
+    let mut pty = pty::Pty::spawn(rows, cols, spawn_cmd)?;
     tracing::debug!("PTY spawned");
 
     let pty_reader = pty.take_reader()?;

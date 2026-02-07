@@ -23,13 +23,31 @@ pub enum PtyError {
     Wait(#[from] std::io::Error),
 }
 
+/// Configuration for what command to spawn in the PTY.
+#[derive(Debug, Clone)]
+pub enum SpawnCommand {
+    /// Spawn the user's shell ($SHELL or /bin/sh fallback).
+    /// The bool indicates whether to force interactive mode (-i flag).
+    Shell { interactive: bool },
+    /// Spawn a command via `sh -c 'command'`.
+    /// The bool indicates whether to force interactive mode (-i flag).
+    Command { command: String, interactive: bool },
+}
+
+impl Default for SpawnCommand {
+    fn default() -> Self {
+        Self::Shell { interactive: false }
+    }
+}
+
 pub struct Pty {
     pair: PtyPair,
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
 }
 
 impl Pty {
-    pub fn spawn(rows: u16, cols: u16) -> Result<Self, PtyError> {
+    /// Spawn a PTY with the given dimensions and command configuration.
+    pub fn spawn(rows: u16, cols: u16, spawn_cmd: SpawnCommand) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
         let size = PtySize {
@@ -41,20 +59,41 @@ impl Pty {
 
         let pair = pty_system.openpty(size).map_err(PtyError::OpenPty)?;
 
-        // Use $SHELL or fall back to /bin/sh
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut cmd = CommandBuilder::new(&shell);
-
-        // Force interactive mode - necessary for proper readline/job control
-        // when the shell doesn't auto-detect the PTY as interactive
-        cmd.arg("-i");
-
-        // Set TERM for proper terminal handling
-        cmd.env("TERM", std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string()));
+        let cmd = Self::build_command(&spawn_cmd);
+        tracing::debug!(?spawn_cmd, "spawning command");
 
         let child = pair.slave.spawn_command(cmd).map_err(PtyError::SpawnCommand)?;
 
         Ok(Self { pair, child: Some(child) })
+    }
+
+    /// Build a CommandBuilder from the spawn configuration.
+    fn build_command(spawn_cmd: &SpawnCommand) -> CommandBuilder {
+        let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
+
+        let mut cmd = match spawn_cmd {
+            SpawnCommand::Shell { interactive } => {
+                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+                let mut cmd = CommandBuilder::new(&shell);
+                if *interactive {
+                    cmd.arg("-i");
+                }
+                cmd
+            }
+            SpawnCommand::Command { command, interactive } => {
+                let mut cmd = CommandBuilder::new("/bin/sh");
+                if *interactive {
+                    cmd.arg("-ic");
+                } else {
+                    cmd.arg("-c");
+                }
+                cmd.arg(command);
+                cmd
+            }
+        };
+
+        cmd.env("TERM", term);
+        cmd
     }
 
     pub fn take_reader(&self) -> Result<Box<dyn Read + Send>, PtyError> {
@@ -127,28 +166,43 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_creates_pty() {
-        let pty = Pty::spawn(24, 80);
+    fn test_spawn_creates_pty_with_shell() {
+        let pty = Pty::spawn(24, 80, SpawnCommand::default());
         assert!(pty.is_ok(), "Failed to spawn PTY: {:?}", pty.err());
     }
 
     #[test]
+    fn test_spawn_creates_pty_with_command() {
+        let pty = Pty::spawn(24, 80, SpawnCommand::Command {
+            command: "echo hello".to_string(),
+            interactive: false,
+        });
+        assert!(pty.is_ok(), "Failed to spawn PTY with command: {:?}", pty.err());
+    }
+
+    #[test]
+    fn test_spawn_interactive_shell() {
+        let pty = Pty::spawn(24, 80, SpawnCommand::Shell { interactive: true });
+        assert!(pty.is_ok(), "Failed to spawn interactive shell: {:?}", pty.err());
+    }
+
+    #[test]
     fn test_take_reader_returns_handle() {
-        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
         let reader = pty.take_reader();
         assert!(reader.is_ok(), "Failed to get reader: {:?}", reader.err());
     }
 
     #[test]
     fn test_take_writer_returns_handle() {
-        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
         let writer = pty.take_writer();
         assert!(writer.is_ok(), "Failed to get writer: {:?}", writer.err());
     }
 
     #[test]
     fn test_write_and_read_roundtrip() {
-        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
         let mut writer = pty.take_writer().expect("Failed to get writer");
         let reader = pty.take_reader().expect("Failed to get reader");
 
@@ -173,8 +227,29 @@ mod tests {
     }
 
     #[test]
+    fn test_command_execution() {
+        // Test that SpawnCommand::Command actually runs the command
+        let marker = "COMMAND_TEST_67890";
+        let pty = Pty::spawn(24, 80, SpawnCommand::Command {
+            command: format!("echo {}", marker),
+            interactive: false,
+        }).expect("Failed to spawn PTY with command");
+
+        let reader = pty.take_reader().expect("Failed to get reader");
+        let output = read_with_timeout(reader, Duration::from_secs(2));
+        let output_str = String::from_utf8_lossy(&output);
+
+        assert!(
+            output_str.contains(marker),
+            "Expected command output to contain '{}', but got: {}",
+            marker,
+            output_str
+        );
+    }
+
+    #[test]
     fn test_resize_succeeds() {
-        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
 
         // Resize to different dimensions
         let result = pty.resize(40, 120);
@@ -187,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_multiple_readers_can_be_cloned() {
-        let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+        let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
 
         // Should be able to clone multiple readers
         let reader1 = pty.take_reader();
@@ -200,11 +275,11 @@ mod tests {
     #[test]
     fn test_spawn_with_various_dimensions() {
         // Test with minimum dimensions
-        let pty_small = Pty::spawn(1, 1);
+        let pty_small = Pty::spawn(1, 1, SpawnCommand::default());
         assert!(pty_small.is_ok(), "Failed to spawn PTY with 1x1 dimensions");
 
         // Test with larger dimensions
-        let pty_large = Pty::spawn(100, 200);
+        let pty_large = Pty::spawn(100, 200, SpawnCommand::default());
         assert!(pty_large.is_ok(), "Failed to spawn PTY with 100x200 dimensions");
     }
 }

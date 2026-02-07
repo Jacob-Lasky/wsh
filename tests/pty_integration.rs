@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use wsh::{broker::Broker, pty::Pty};
+use wsh::{broker::Broker, pty::{Pty, SpawnCommand}};
 
 /// Helper to read from PTY with a timeout to avoid blocking forever.
 /// The reader thread checks the stop flag periodically.
@@ -51,7 +51,7 @@ fn read_pty_and_publish(
 #[test]
 fn test_pty_output_broadcasts_to_subscribers() {
     // Create PTY
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let mut writer = pty.take_writer().expect("Failed to get writer");
     let reader = pty.take_reader().expect("Failed to get reader");
 
@@ -118,7 +118,7 @@ fn test_pty_output_broadcasts_to_subscribers() {
 #[test]
 fn test_full_pty_roundtrip_with_broker() {
     // Create PTY
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let mut pty_writer = pty.take_writer().expect("Failed to get writer");
     let reader = pty.take_reader().expect("Failed to get reader");
 
@@ -203,7 +203,7 @@ fn test_full_pty_roundtrip_with_broker() {
 #[test]
 fn test_multiple_broker_subscribers_receive_pty_output() {
     // Create PTY
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let mut writer = pty.take_writer().expect("Failed to get writer");
     let reader = pty.take_reader().expect("Failed to get reader");
 
@@ -300,7 +300,7 @@ fn test_multiple_broker_subscribers_receive_pty_output() {
 #[test]
 fn test_late_subscriber_receives_future_output() {
     // Create PTY
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let mut writer = pty.take_writer().expect("Failed to get writer");
     let reader = pty.take_reader().expect("Failed to get reader");
 

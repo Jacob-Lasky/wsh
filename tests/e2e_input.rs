@@ -10,14 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use wsh::{broker::Broker, pty::Pty};
+use wsh::{broker::Broker, pty::{Pty, SpawnCommand}};
 
 /// This test replicates the exact architecture from main.rs to verify
 /// that async sends from the API properly reach the blocking PTY writer.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_async_api_input_reaches_pty() {
     // Spawn PTY
-    let pty = Pty::spawn(24, 80).expect("Failed to spawn PTY");
+    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
     let mut pty_reader = pty.take_reader().expect("Failed to get reader");
     let mut pty_writer = pty.take_writer().expect("Failed to get writer");
 
