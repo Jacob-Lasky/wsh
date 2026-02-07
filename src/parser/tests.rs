@@ -127,6 +127,55 @@ async fn test_parser_scrollback() {
 }
 
 #[tokio::test]
+async fn test_scrollback_includes_all_lines() {
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen for testing
+
+    // Send enough lines to create scrollback
+    for i in 0..10 {
+        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // First check screen to see total_lines
+    let screen_response = parser
+        .query(Query::Screen {
+            format: Format::Plain,
+        })
+        .await
+        .unwrap();
+
+    let (screen_total_lines, screen_first_line_index) = match &screen_response {
+        QueryResponse::Screen(screen) => (screen.total_lines, screen.first_line_index),
+        _ => panic!("expected Screen response"),
+    };
+
+    // Now check scrollback
+    let response = parser
+        .query(Query::Scrollback {
+            format: Format::Plain,
+            offset: 0,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+
+    match response {
+        QueryResponse::Scrollback(scrollback) => {
+            // Verify: with 10 lines fed and 5 rows visible, scrollback should contain ALL lines
+            // (both history and current screen)
+            assert!(screen_total_lines >= 10, "should have at least 10 total lines, got {}", screen_total_lines);
+            assert!(screen_first_line_index >= 5, "first_line_index should be >= 5, got {}", screen_first_line_index);
+            // Scrollback total_lines should match screen total_lines (all lines in buffer)
+            assert_eq!(scrollback.total_lines, screen_total_lines, "scrollback total_lines should equal screen total_lines");
+            assert!(!scrollback.lines.is_empty(), "scrollback lines should not be empty");
+        }
+        _ => panic!("expected Scrollback response"),
+    }
+}
+
+#[tokio::test]
 async fn test_parser_event_stream() {
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
@@ -171,6 +220,80 @@ async fn test_line_event_includes_total_lines() {
         }
         _ => panic!("expected Line event, got {:?}", event),
     }
+}
+
+#[tokio::test]
+async fn test_scrollback_when_in_alternate_screen() {
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen for testing
+
+    // Send enough lines to create scrollback
+    for i in 0..10 {
+        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+    }
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Verify we have scrollback before switching to alternate screen
+    let response = parser
+        .query(Query::Scrollback {
+            format: Format::Plain,
+            offset: 0,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+
+    let scrollback_before = match &response {
+        QueryResponse::Scrollback(s) => s.total_lines,
+        _ => panic!("expected Scrollback response"),
+    };
+    assert!(scrollback_before > 0, "Should have scrollback before alternate screen");
+
+    // Enter alternate screen mode (DECSET 1049 or smcup)
+    broker.publish(bytes::Bytes::from("\x1b[?1049h")); // Enter alternate screen
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Query scrollback while in alternate screen
+    let response = parser
+        .query(Query::Scrollback {
+            format: Format::Plain,
+            offset: 0,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+
+    let scrollback_in_alternate = match &response {
+        QueryResponse::Scrollback(s) => s.total_lines,
+        _ => panic!("expected Scrollback response"),
+    };
+
+    // In alternate screen mode, scrollback returns the alternate buffer content
+    // (just the current screen, since alternate buffer has no history)
+    // Alternate screen should have exactly 5 lines (the screen size)
+    assert_eq!(scrollback_in_alternate, 5, "Alternate screen should have screen-size lines");
+
+    // Exit alternate screen mode (DECRST 1049 or rmcup)
+    broker.publish(bytes::Bytes::from("\x1b[?1049l")); // Exit alternate screen
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Query scrollback after exiting alternate screen
+    let response = parser
+        .query(Query::Scrollback {
+            format: Format::Plain,
+            offset: 0,
+            limit: 100,
+        })
+        .await
+        .unwrap();
+
+    let scrollback_after = match &response {
+        QueryResponse::Scrollback(s) => s.total_lines,
+        _ => panic!("expected Scrollback response"),
+    };
+
+    // Scrollback should be preserved after exiting alternate screen
+    assert_eq!(scrollback_after, scrollback_before, "Scrollback should be preserved after exiting alternate screen");
 }
 
 #[tokio::test]

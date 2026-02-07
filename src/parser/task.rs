@@ -123,12 +123,13 @@ fn handle_query(
         } => {
             let styled = matches!(format, Format::Styled);
             let all_lines: Vec<_> = vt.lines().collect();
-            let (_, rows) = vt.size();
+            let total_lines = all_lines.len();
 
-            let scrollback_count = all_lines.len().saturating_sub(rows);
-            let scrollback_lines: Vec<_> = all_lines
+            // Return all lines (history + current screen), applying offset/limit
+            // In alternate screen mode, this returns just the current screen
+            // since the alternate buffer has no scrollback history
+            let lines: Vec<_> = all_lines
                 .into_iter()
-                .take(scrollback_count)
                 .skip(offset)
                 .take(limit)
                 .map(|l| format_line(l, styled))
@@ -136,8 +137,8 @@ fn handle_query(
 
             QueryResponse::Scrollback(ScrollbackResponse {
                 epoch,
-                lines: scrollback_lines,
-                total_lines: scrollback_count,
+                lines,
+                total_lines,
                 offset,
             })
         }

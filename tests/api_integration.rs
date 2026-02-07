@@ -534,3 +534,92 @@ async fn test_websocket_line_event_includes_total_lines() {
         "should have received a line event with total_lines"
     );
 }
+
+/// Test scrollback endpoint returns correct data
+#[tokio::test]
+async fn test_scrollback_endpoint() {
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let broker = Broker::new();
+    let output_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 5, 1000); // 5-row screen to get scrollback quickly
+    let state = AppState {
+        input_tx,
+        output_rx: output_tx.clone(),
+        shutdown: ShutdownCoordinator::new(),
+        parser,
+    };
+    let app = router(state);
+
+    // Send enough lines to create scrollback (more than 5 rows)
+    for i in 0..20 {
+        output_tx
+            .send(bytes::Bytes::from(format!("Line {}\r\n", i)))
+            .expect("Failed to send");
+    }
+
+    // Wait for parser to process
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/scrollback?format=plain")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Should have scrollback lines
+    let total_lines = json["total_lines"].as_u64().unwrap_or(0);
+    let lines = json["lines"].as_array().map(|a| a.len()).unwrap_or(0);
+
+    // With 20 lines sent and 5 rows visible, we expect ~15 lines of scrollback
+    assert!(total_lines > 0, "Expected total_lines > 0, got {}", total_lines);
+    assert!(lines > 0, "Expected lines.len > 0, got {}", lines);
+}
+
+/// Test that scrollback initially contains the blank screen
+#[tokio::test]
+async fn test_scrollback_initial_state() {
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let broker = Broker::new();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let state = AppState {
+        input_tx,
+        output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
+        parser,
+    };
+    let app = router(state);
+
+    // Query immediately without any output
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/scrollback?format=plain")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Initially, scrollback contains the blank screen (24 rows)
+    // Under the new semantics, scrollback includes current screen content
+    let total_lines = json["total_lines"].as_u64().unwrap_or(0);
+    assert_eq!(total_lines, 24, "Expected initial screen lines (24 rows), got {}", total_lines);
+}
