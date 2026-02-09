@@ -28,7 +28,8 @@ pub enum PtyError {
 pub enum SpawnCommand {
     /// Spawn the user's shell ($SHELL or /bin/sh fallback).
     /// The bool indicates whether to force interactive mode (-i flag).
-    Shell { interactive: bool },
+    /// An optional shell path overrides $SHELL.
+    Shell { interactive: bool, shell: Option<String> },
     /// Spawn a command via `sh -c 'command'`.
     /// The bool indicates whether to force interactive mode (-i flag).
     Command { command: String, interactive: bool },
@@ -36,7 +37,7 @@ pub enum SpawnCommand {
 
 impl Default for SpawnCommand {
     fn default() -> Self {
-        Self::Shell { interactive: false }
+        Self::Shell { interactive: false, shell: None }
     }
 }
 
@@ -72,9 +73,12 @@ impl Pty {
         let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
 
         let mut cmd = match spawn_cmd {
-            SpawnCommand::Shell { interactive } => {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-                let mut cmd = CommandBuilder::new(&shell);
+            SpawnCommand::Shell { interactive, shell } => {
+                let shell_path = match shell {
+                    Some(s) => s.clone(),
+                    None => std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+                };
+                let mut cmd = CommandBuilder::new(&shell_path);
                 if *interactive {
                     cmd.arg("-i");
                 }
@@ -182,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_spawn_interactive_shell() {
-        let pty = Pty::spawn(24, 80, SpawnCommand::Shell { interactive: true });
+        let pty = Pty::spawn(24, 80, SpawnCommand::Shell { interactive: true, shell: None });
         assert!(pty.is_ok(), "Failed to spawn interactive shell: {:?}", pty.err());
     }
 

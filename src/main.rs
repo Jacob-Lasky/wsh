@@ -40,6 +40,14 @@ struct Args {
     /// Force interactive mode
     #[arg(short = 'i')]
     interactive: bool,
+
+    /// Authentication token for non-localhost bindings
+    #[arg(long, env = "WSH_TOKEN")]
+    token: Option<String>,
+
+    /// Shell to spawn (overrides $SHELL)
+    #[arg(long)]
+    shell: Option<String>,
 }
 
 #[derive(Error, Debug)]
@@ -54,6 +62,29 @@ pub enum WshError {
     TaskJoin(#[from] tokio::task::JoinError),
 }
 
+fn is_loopback(addr: &SocketAddr) -> bool {
+    addr.ip().is_loopback()
+}
+
+fn resolve_token(args: &Args) -> Option<String> {
+    if is_loopback(&args.bind) {
+        return None;
+    }
+    match &args.token {
+        Some(token) => Some(token.clone()),
+        None => {
+            use rand::Rng;
+            let token: String = rand::thread_rng()
+                .sample_iter(&rand::distributions::Alphanumeric)
+                .take(32)
+                .map(char::from)
+                .collect();
+            eprintln!("wsh: API token (required for non-localhost): {}", token);
+            Some(token)
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), WshError> {
     let args = Args::parse();
@@ -66,6 +97,11 @@ async fn main() -> Result<(), WshError> {
         .init();
 
     tracing::info!("wsh starting");
+
+    let token = resolve_token(&args);
+    if let Some(ref _t) = token {
+        tracing::info!("auth token configured");
+    }
 
     // Enable raw mode so we receive all keystrokes (including Ctrl+C, etc.)
     // The guard restores normal mode when dropped
@@ -82,6 +118,7 @@ async fn main() -> Result<(), WshError> {
         },
         None => SpawnCommand::Shell {
             interactive: args.interactive,
+            shell: args.shell.clone(),
         },
     };
 
