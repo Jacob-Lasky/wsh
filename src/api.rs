@@ -13,6 +13,7 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::input::{InputMode, Mode};
 use crate::overlay::{Overlay, OverlaySpan, OverlayStore};
 use crate::parser::{
     events::{Event, EventType, Subscribe},
@@ -28,6 +29,7 @@ pub struct AppState {
     pub shutdown: ShutdownCoordinator,
     pub parser: Parser,
     pub overlays: OverlayStore,
+    pub input_mode: InputMode,
 }
 
 #[derive(Serialize)]
@@ -420,10 +422,36 @@ async fn overlay_clear(State(state): State<AppState>) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
+// Input mode response type
+#[derive(Serialize)]
+struct InputModeResponse {
+    mode: Mode,
+}
+
+// Input mode handlers
+async fn input_mode_get(State(state): State<AppState>) -> Json<InputModeResponse> {
+    Json(InputModeResponse {
+        mode: state.input_mode.get(),
+    })
+}
+
+async fn input_capture(State(state): State<AppState>) -> StatusCode {
+    state.input_mode.capture();
+    StatusCode::NO_CONTENT
+}
+
+async fn input_release(State(state): State<AppState>) -> StatusCode {
+    state.input_mode.release();
+    StatusCode::NO_CONTENT
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/input", post(input))
+        .route("/input/mode", get(input_mode_get))
+        .route("/input/capture", post(input_capture))
+        .route("/input/release", post(input_release))
         .route("/ws/raw", get(ws_raw))
         .route("/ws/json", get(ws_json))
         .route("/screen", get(screen))
@@ -448,6 +476,7 @@ pub fn router(state: AppState) -> Router {
 mod tests {
     use super::*;
     use crate::broker::Broker;
+    use crate::input::InputMode;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -467,6 +496,7 @@ mod tests {
             shutdown: ShutdownCoordinator::new(),
             parser,
             overlays: OverlayStore::new(),
+            input_mode: InputMode::new(),
         };
         (state, input_rx)
     }
@@ -686,5 +716,100 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn test_input_mode_default() {
+        let (state, _input_rx) = create_test_state();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/input/mode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "passthrough");
+    }
+
+    #[tokio::test]
+    async fn test_input_capture_and_release() {
+        let (state, _input_rx) = create_test_state();
+        let app = router(state);
+
+        // Switch to capture mode
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/input/capture")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Verify mode is now capture
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/input/mode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "capture");
+
+        // Switch back to passthrough mode
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/input/release")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // Verify mode is back to passthrough
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/input/mode")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["mode"], "passthrough");
     }
 }

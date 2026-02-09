@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use wsh::{api, broker::Broker, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
+use wsh::{api, broker::Broker, input::InputMode, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
 
 async fn start_server(app: axum::Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -74,6 +74,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         shutdown: ShutdownCoordinator::new(),
         parser,
         overlays: OverlayStore::new(),
+        input_mode: InputMode::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;
@@ -194,6 +195,7 @@ async fn test_websocket_text_input_reaches_pty() {
         shutdown: ShutdownCoordinator::new(),
         parser,
         overlays: OverlayStore::new(),
+        input_mode: InputMode::new(),
     };
     let app = api::router(state);
     let addr = start_server(app).await;
