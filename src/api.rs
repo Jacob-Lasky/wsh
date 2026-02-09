@@ -210,6 +210,13 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
     let mut events = Box::pin(state.parser.subscribe());
     let subscribed_types = subscribe.events;
 
+    // Subscribe to input events if requested
+    let mut input_rx = if subscribed_types.contains(&EventType::Input) {
+        Some(state.input_broadcaster.subscribe())
+    } else {
+        None
+    };
+
     // Main event loop
     loop {
         tokio::select! {
@@ -243,6 +250,31 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                         }
                     }
                     None => break,
+                }
+            }
+
+            // Handle input events if subscribed
+            input_event = async {
+                match &mut input_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match input_event {
+                    Ok(event) => {
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            if ws_tx.send(Message::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Broadcaster closed, remove subscription
+                        input_rx = None;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // Missed some events, continue
+                    }
                 }
             }
 

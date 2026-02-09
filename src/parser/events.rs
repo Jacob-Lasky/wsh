@@ -69,4 +69,6 @@ pub enum EventType {
     Cursor,
     Mode,
     Diffs,
+    Input,
+    Overlay,
 }
