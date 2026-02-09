@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, input::InputMode, overlay::OverlayStore, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, input::InputMode, overlay::{self, OverlayStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -115,8 +115,11 @@ async fn main() -> Result<(), WshError> {
     // Shutdown coordinator for graceful client disconnection
     let shutdown = ShutdownCoordinator::new();
 
+    // Create overlay store before AppState so it can be shared with pty_reader
+    let overlays = OverlayStore::new();
+
     // Spawn I/O tasks
-    let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone());
+    let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone(), overlays.clone());
     spawn_pty_writer(pty_writer, input_rx);
     spawn_stdin_reader(input_tx.clone());
 
@@ -126,7 +129,7 @@ async fn main() -> Result<(), WshError> {
         output_rx: broker.sender(),
         shutdown: shutdown.clone(),
         parser: parser.clone(),
-        overlays: OverlayStore::new(),
+        overlays: overlays.clone(),
         input_mode: InputMode::new(),
     };
     let app = api::router(state);
@@ -177,6 +180,7 @@ async fn main() -> Result<(), WshError> {
 fn spawn_pty_reader(
     mut reader: Box<dyn Read + Send>,
     broker: broker::Broker,
+    overlays: overlay::OverlayStore,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
         let mut stdout = std::io::stdout();
@@ -190,7 +194,17 @@ fn spawn_pty_reader(
                 }
                 Ok(n) => {
                     let data = Bytes::copy_from_slice(&buf[..n]);
+
+                    // Forward PTY output
                     let _ = stdout.write_all(&data);
+
+                    // Render overlays on top
+                    let overlay_list = overlays.list();
+                    if !overlay_list.is_empty() {
+                        let overlay_output = overlay::render_all_overlays(&overlay_list);
+                        let _ = stdout.write_all(overlay_output.as_bytes());
+                    }
+
                     let _ = stdout.flush();
                     broker.publish(data);
                 }
