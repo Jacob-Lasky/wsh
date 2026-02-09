@@ -1,3 +1,4 @@
+pub mod error;
 mod handlers;
 
 use axum::{
