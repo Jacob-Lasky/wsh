@@ -7,6 +7,9 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+
+static OPENAPI_SPEC: &str = include_str!("../../docs/api/openapi.yaml");
+static DOCS_INDEX: &str = include_str!("../../docs/api/README.md");
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -466,4 +469,20 @@ pub(super) async fn input_capture(State(state): State<AppState>) -> StatusCode {
 pub(super) async fn input_release(State(state): State<AppState>) -> StatusCode {
     state.input_mode.release();
     StatusCode::NO_CONTENT
+}
+
+pub(super) async fn openapi_spec() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/yaml; charset=utf-8")],
+        OPENAPI_SPEC,
+    )
+}
+
+pub(super) async fn docs_index() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("content-type", "text/markdown; charset=utf-8")],
+        DOCS_INDEX,
+    )
 }

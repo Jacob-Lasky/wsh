@@ -62,6 +62,8 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/openapi.yaml", get(openapi_spec))
+        .route("/docs", get(docs_index))
         .merge(protected)
 }
 
@@ -405,5 +407,115 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["mode"], "passthrough");
+    }
+
+    #[tokio::test]
+    async fn test_openapi_spec_endpoint() {
+        let (state, _input_rx) = create_test_state();
+        let app = router(state, None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.yaml")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let ct = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.contains("text/yaml"));
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("openapi:"));
+        assert!(text.contains("/health"));
+    }
+
+    #[tokio::test]
+    async fn test_docs_endpoint() {
+        let (state, _input_rx) = create_test_state();
+        let app = router(state, None);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/docs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let ct = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(ct.contains("text/markdown"));
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("wsh API"));
+        assert!(text.contains("/health"));
+    }
+
+    #[tokio::test]
+    async fn test_docs_and_openapi_exempt_from_auth() {
+        let (state, _input_rx) = create_test_state();
+        let app = router(state, Some("secret-token".to_string()));
+
+        // /openapi.yaml should work without auth
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.yaml")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // /docs should work without auth
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/docs")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // /screen should require auth
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/screen")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
