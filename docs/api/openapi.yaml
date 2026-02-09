@@ -1,0 +1,774 @@
+openapi: "3.1.0"
+info:
+  title: wsh API
+  version: "0.1.0"
+  description: >
+    wsh exposes terminal I/O via HTTP and WebSocket. This spec covers every
+    endpoint, request/response schema, authentication, and error format.
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Default local development server
+
+security:
+  - bearerAuth: []
+  - queryAuth: []
+
+tags:
+  - name: health
+    description: Health check (no auth required)
+  - name: terminal
+    description: Terminal state queries
+  - name: input
+    description: Input injection and capture
+  - name: websocket
+    description: Real-time WebSocket streams
+  - name: overlay
+    description: Overlay management
+  - name: meta
+    description: Documentation and spec endpoints
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      tags: [health]
+      security: []
+      responses:
+        "200":
+          description: Server is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /input:
+    post:
+      operationId: postInput
+      summary: Inject input bytes into the terminal PTY
+      tags: [input]
+      description: >
+        Sends raw bytes to the terminal. The request body is forwarded
+        verbatim to the PTY -- no JSON wrapping.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "204":
+          description: Input accepted and forwarded to PTY.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          description: Failed to send input to PTY.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /screen:
+    get:
+      operationId: getScreen
+      summary: Get current visible screen state
+      tags: [terminal]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Format"
+      responses:
+        "200":
+          description: Current screen state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScreenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Terminal parser unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /scrollback:
+    get:
+      operationId: getScrollback
+      summary: Get scrollback buffer contents
+      tags: [terminal]
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Format"
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 100
+      responses:
+        "200":
+          description: Scrollback buffer contents.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrollbackResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Terminal parser unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /ws/raw:
+    get:
+      operationId: wsRaw
+      summary: Raw binary WebSocket
+      tags: [websocket]
+      description: >
+        Bidirectional byte stream mirroring the PTY. Output arrives as binary
+        frames. Send binary or text frames to inject input.
+      responses:
+        "101":
+          description: WebSocket upgrade successful.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /ws/json:
+    get:
+      operationId: wsJson
+      summary: JSON event WebSocket
+      tags: [websocket]
+      description: >
+        Structured event stream with subscription filtering. After upgrade,
+        server sends {"connected": true}. Client sends a Subscribe message
+        to begin receiving events.
+      responses:
+        "101":
+          description: WebSocket upgrade successful.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /overlay:
+    post:
+      operationId: createOverlay
+      summary: Create an overlay
+      tags: [overlay]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOverlayRequest"
+      responses:
+        "201":
+          description: Overlay created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateOverlayResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    get:
+      operationId: listOverlays
+      summary: List all overlays
+      tags: [overlay]
+      responses:
+        "200":
+          description: Array of all overlays.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Overlay"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: clearOverlays
+      summary: Clear all overlays
+      tags: [overlay]
+      responses:
+        "204":
+          description: All overlays removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /overlay/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Overlay ID
+    get:
+      operationId: getOverlay
+      summary: Get a single overlay
+      tags: [overlay]
+      responses:
+        "200":
+          description: The overlay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Overlay"
+        "404":
+          description: Overlay not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      operationId: updateOverlay
+      summary: Replace overlay spans
+      tags: [overlay]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOverlayRequest"
+      responses:
+        "204":
+          description: Overlay updated.
+        "404":
+          description: Overlay not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      operationId: patchOverlay
+      summary: Move or reorder an overlay
+      tags: [overlay]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchOverlayRequest"
+      responses:
+        "204":
+          description: Overlay patched.
+        "404":
+          description: Overlay not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      operationId: deleteOverlay
+      summary: Delete an overlay
+      tags: [overlay]
+      responses:
+        "204":
+          description: Overlay deleted.
+        "404":
+          description: Overlay not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /input/mode:
+    get:
+      operationId: getInputMode
+      summary: Get current input mode
+      tags: [input]
+      responses:
+        "200":
+          description: Current input mode.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InputModeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /input/capture:
+    post:
+      operationId: postInputCapture
+      summary: Switch to capture mode
+      tags: [input]
+      description: >
+        In capture mode, keyboard input is broadcast to API subscribers
+        but not forwarded to the PTY. Idempotent.
+      responses:
+        "204":
+          description: Mode switched to capture.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /input/release:
+    post:
+      operationId: postInputRelease
+      summary: Switch to passthrough mode
+      tags: [input]
+      description: >
+        In passthrough mode, keyboard input goes to both API subscribers
+        and the PTY. Idempotent.
+      responses:
+        "204":
+          description: Mode switched to passthrough.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /openapi.yaml:
+    get:
+      operationId: getOpenApiSpec
+      summary: OpenAPI specification
+      tags: [meta]
+      security: []
+      responses:
+        "200":
+          description: This OpenAPI spec.
+          content:
+            text/yaml:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      operationId: getDocs
+      summary: API documentation
+      tags: [meta]
+      security: []
+      responses:
+        "200":
+          description: API documentation in Markdown.
+          content:
+            text/markdown:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "Authorization: Bearer <token>"
+    queryAuth:
+      type: apiKey
+      in: query
+      name: token
+      description: "?token=<token> query parameter"
+
+  responses:
+    Unauthorized:
+      description: No credentials provided.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Invalid credentials.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    # --- Enumerations ---
+
+    Format:
+      type: string
+      enum: [plain, styled]
+      default: styled
+
+    InputMode:
+      type: string
+      enum: [passthrough, capture]
+
+    # --- Terminal Colors ---
+
+    Color:
+      description: Terminal color (256-color palette or true color).
+      oneOf:
+        - type: object
+          required: [indexed]
+          properties:
+            indexed:
+              type: integer
+              minimum: 0
+              maximum: 255
+          additionalProperties: false
+        - type: object
+          required: [rgb]
+          properties:
+            rgb:
+              type: object
+              required: [r, g, b]
+              properties:
+                r: { type: integer, minimum: 0, maximum: 255 }
+                g: { type: integer, minimum: 0, maximum: 255 }
+                b: { type: integer, minimum: 0, maximum: 255 }
+              additionalProperties: false
+          additionalProperties: false
+
+    NamedColor:
+      type: string
+      enum: [black, red, green, yellow, blue, magenta, cyan, white]
+
+    OverlayColor:
+      description: Overlay color (named string or RGB object).
+      oneOf:
+        - $ref: "#/components/schemas/NamedColor"
+        - type: object
+          required: [r, g, b]
+          properties:
+            r: { type: integer, minimum: 0, maximum: 255 }
+            g: { type: integer, minimum: 0, maximum: 255 }
+            b: { type: integer, minimum: 0, maximum: 255 }
+          additionalProperties: false
+
+    # --- Terminal State ---
+
+    Span:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+        fg: { $ref: "#/components/schemas/Color" }
+        bg: { $ref: "#/components/schemas/Color" }
+        bold: { type: boolean }
+        faint: { type: boolean }
+        italic: { type: boolean }
+        underline: { type: boolean }
+        strikethrough: { type: boolean }
+        blink: { type: boolean }
+        inverse: { type: boolean }
+      description: >
+        Style fields are omitted when false/unset (skip_serializing_if).
+
+    FormattedLine:
+      description: >
+        Either a plain string (no styling) or an array of styled Spans.
+        Uses untagged serialization.
+      oneOf:
+        - type: string
+        - type: array
+          items: { $ref: "#/components/schemas/Span" }
+
+    Cursor:
+      type: object
+      required: [row, col, visible]
+      properties:
+        row: { type: integer, minimum: 0 }
+        col: { type: integer, minimum: 0 }
+        visible: { type: boolean }
+
+    ScreenResponse:
+      type: object
+      required: [epoch, first_line_index, total_lines, lines, cursor, cols, rows, alternate_active]
+      properties:
+        epoch: { type: integer, minimum: 0 }
+        first_line_index: { type: integer, minimum: 0 }
+        total_lines: { type: integer, minimum: 0 }
+        lines: { type: array, items: { $ref: "#/components/schemas/FormattedLine" } }
+        cursor: { $ref: "#/components/schemas/Cursor" }
+        cols: { type: integer, minimum: 1 }
+        rows: { type: integer, minimum: 1 }
+        alternate_active: { type: boolean }
+
+    ScrollbackResponse:
+      type: object
+      required: [epoch, lines, total_lines, offset]
+      properties:
+        epoch: { type: integer, minimum: 0 }
+        lines: { type: array, items: { $ref: "#/components/schemas/FormattedLine" } }
+        total_lines: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+
+    CursorResponse:
+      type: object
+      required: [epoch, cursor]
+      properties:
+        epoch: { type: integer, minimum: 0 }
+        cursor: { $ref: "#/components/schemas/Cursor" }
+
+    # --- Overlays ---
+
+    OverlaySpan:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+        fg: { $ref: "#/components/schemas/OverlayColor" }
+        bg: { $ref: "#/components/schemas/OverlayColor" }
+        bold: { type: boolean, default: false }
+        italic: { type: boolean, default: false }
+        underline: { type: boolean, default: false }
+
+    Overlay:
+      type: object
+      required: [id, x, y, z, spans]
+      properties:
+        id: { type: string }
+        x: { type: integer, minimum: 0 }
+        y: { type: integer, minimum: 0 }
+        z: { type: integer }
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+
+    CreateOverlayRequest:
+      type: object
+      required: [x, y, spans]
+      properties:
+        x: { type: integer, minimum: 0 }
+        y: { type: integer, minimum: 0 }
+        z: { type: integer }
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+
+    CreateOverlayResponse:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+
+    UpdateOverlayRequest:
+      type: object
+      required: [spans]
+      properties:
+        spans: { type: array, items: { $ref: "#/components/schemas/OverlaySpan" } }
+
+    PatchOverlayRequest:
+      type: object
+      properties:
+        x: { type: integer, minimum: 0 }
+        y: { type: integer, minimum: 0 }
+        z: { type: integer }
+
+    # --- Input ---
+
+    InputModeResponse:
+      type: object
+      required: [mode]
+      properties:
+        mode: { $ref: "#/components/schemas/InputMode" }
+
+    # --- WebSocket Messages ---
+
+    Subscribe:
+      type: object
+      required: [events]
+      properties:
+        events: { type: array, items: { $ref: "#/components/schemas/EventType" } }
+        interval_ms: { type: integer, minimum: 0, default: 100 }
+        format: { $ref: "#/components/schemas/Format" }
+
+    EventType:
+      type: string
+      enum: [lines, chars, cursor, mode, diffs, input, overlay]
+
+    Event:
+      description: Discriminated union of all event types, tagged by "event" field.
+      oneOf:
+        - $ref: "#/components/schemas/LineEvent"
+        - $ref: "#/components/schemas/CursorEvent"
+        - $ref: "#/components/schemas/ModeEvent"
+        - $ref: "#/components/schemas/ResetEvent"
+        - $ref: "#/components/schemas/SyncEvent"
+        - $ref: "#/components/schemas/DiffEvent"
+      discriminator:
+        propertyName: event
+        mapping:
+          line: "#/components/schemas/LineEvent"
+          cursor: "#/components/schemas/CursorEvent"
+          mode: "#/components/schemas/ModeEvent"
+          reset: "#/components/schemas/ResetEvent"
+          sync: "#/components/schemas/SyncEvent"
+          diff: "#/components/schemas/DiffEvent"
+
+    LineEvent:
+      type: object
+      required: [event, seq, index, total_lines, line]
+      properties:
+        event: { type: string, const: line }
+        seq: { type: integer, minimum: 0 }
+        index: { type: integer, minimum: 0 }
+        total_lines: { type: integer, minimum: 0 }
+        line: { $ref: "#/components/schemas/FormattedLine" }
+
+    CursorEvent:
+      type: object
+      required: [event, seq, row, col, visible]
+      properties:
+        event: { type: string, const: cursor }
+        seq: { type: integer, minimum: 0 }
+        row: { type: integer, minimum: 0 }
+        col: { type: integer, minimum: 0 }
+        visible: { type: boolean }
+
+    ModeEvent:
+      type: object
+      required: [event, seq, alternate_active]
+      properties:
+        event: { type: string, const: mode }
+        seq: { type: integer, minimum: 0 }
+        alternate_active: { type: boolean }
+
+    ResetEvent:
+      type: object
+      required: [event, seq, reason]
+      properties:
+        event: { type: string, const: reset }
+        seq: { type: integer, minimum: 0 }
+        reason: { $ref: "#/components/schemas/ResetReason" }
+
+    ResetReason:
+      type: string
+      enum: [clear_screen, clear_scrollback, hard_reset, alternate_screen_enter, alternate_screen_exit, resize]
+
+    SyncEvent:
+      type: object
+      required: [event, seq, screen, scrollback_lines]
+      properties:
+        event: { type: string, const: sync }
+        seq: { type: integer, minimum: 0 }
+        screen: { $ref: "#/components/schemas/ScreenResponse" }
+        scrollback_lines: { type: integer, minimum: 0 }
+
+    DiffEvent:
+      type: object
+      required: [event, seq, changed_lines, screen]
+      properties:
+        event: { type: string, const: diff }
+        seq: { type: integer, minimum: 0 }
+        changed_lines: { type: array, items: { type: integer, minimum: 0 } }
+        screen: { $ref: "#/components/schemas/ScreenResponse" }
+
+    # --- Input Events (WebSocket) ---
+
+    InputEvent:
+      description: Input events broadcast via WebSocket.
+      oneOf:
+        - $ref: "#/components/schemas/InputInputEvent"
+        - $ref: "#/components/schemas/InputModeChangeEvent"
+      discriminator:
+        propertyName: event
+        mapping:
+          input: "#/components/schemas/InputInputEvent"
+          mode: "#/components/schemas/InputModeChangeEvent"
+
+    InputInputEvent:
+      type: object
+      required: [event, mode, raw]
+      properties:
+        event: { type: string, const: input }
+        mode: { $ref: "#/components/schemas/InputMode" }
+        raw: { type: array, items: { type: integer, minimum: 0, maximum: 255 } }
+        parsed:
+          oneOf:
+            - $ref: "#/components/schemas/ParsedKey"
+            - type: "null"
+
+    InputModeChangeEvent:
+      type: object
+      required: [event, mode]
+      properties:
+        event: { type: string, const: mode }
+        mode: { $ref: "#/components/schemas/InputMode" }
+
+    ParsedKey:
+      type: object
+      required: [key, modifiers]
+      properties:
+        key:
+          oneOf:
+            - type: string
+            - type: "null"
+        modifiers: { type: array, items: { type: string } }
+
+    # --- Common ---
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - auth_required
+                - auth_invalid
+                - not_found
+                - overlay_not_found
+                - invalid_request
+                - invalid_overlay
+                - invalid_input_mode
+                - invalid_format
+                - channel_full
+                - parser_unavailable
+                - input_send_failed
+                - internal_error
+            message: { type: string }
