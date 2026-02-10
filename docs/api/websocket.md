@@ -41,8 +41,8 @@ verbatim -- no JSON encoding.
 GET /ws/json
 ```
 
-A structured event stream with subscription-based filtering. Use this for
-programmatic access to terminal state changes.
+A structured protocol for querying terminal state, injecting input, managing
+overlays, and subscribing to real-time events -- all over a single connection.
 
 ### Connection Flow
 
@@ -52,10 +52,12 @@ Client                           Server
   |  ---- WS upgrade ---------->  |
   |  <--- { "connected": true } - |
   |                                |
-  |  ---- subscribe message ---->  |
-  |  <--- { "subscribed": [...] }  |
-  |  <--- sync event               |
+  |  ---- method call ---------->  |
+  |  <--- method response ------  |
   |                                |
+  |  ---- subscribe method ----->  |
+  |  <--- subscribe response ---  |
+  |  <--- sync event              |
   |  <--- events (continuous) ---  |
   |                                |
 ```
@@ -68,19 +70,62 @@ After the WebSocket handshake, the server sends:
 {"connected": true}
 ```
 
-### Step 2: Subscribe
+### Request/Response Protocol
 
-Send a subscribe message to select which event types you want:
+All client messages use a JSON-RPC-like envelope:
 
 ```json
-{
-  "events": ["lines", "cursor", "diffs"],
-  "interval_ms": 100,
-  "format": "styled"
-}
+{"id": 1, "method": "get_screen", "params": {"format": "styled"}}
 ```
 
-| Field | Type | Default | Description |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `method` | string | yes | Method name to invoke |
+| `id` | any | no | Request identifier, echoed in response |
+| `params` | object | no | Method-specific parameters (defaults to `{}`) |
+
+The server responds with:
+
+```json
+{"id": 1, "method": "get_screen", "result": { ... }}
+```
+
+On error:
+
+```json
+{"id": 1, "method": "get_screen", "error": {"code": "parser_unavailable", "message": "..."}}
+```
+
+**Distinguishing message types** -- server messages are one of three kinds:
+
+| Kind | Discriminator | Example |
+|------|---------------|---------|
+| Connected | has `connected` | `{"connected": true}` |
+| Response | has `method` | `{"method": "get_screen", "result": {...}}` |
+| Event | has `event` | `{"event": "line", "seq": 5, ...}` |
+
+**Protocol errors** -- if the client sends invalid JSON or a message without a
+`method` field, the server returns an error with no `method` or `id`:
+
+```json
+{"error": {"code": "invalid_request", "message": "Invalid JSON or missing 'method' field."}}
+```
+
+### Step 2: Subscribe to Events
+
+Subscribing is a method call like any other. Send:
+
+```json
+{"id": 1, "method": "subscribe", "params": {"events": ["lines", "cursor", "diffs"]}}
+```
+
+Response:
+
+```json
+{"id": 1, "method": "subscribe", "result": {"events": ["lines", "cursor", "diffs"]}}
+```
+
+| Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `events` | array of strings | (required) | Event types to subscribe to |
 | `interval_ms` | integer | `100` | Minimum interval between events (ms) |
@@ -95,12 +140,6 @@ Send a subscribe message to select which event types you want:
 | `mode` | Alternate screen enter/exit |
 | `diffs` | Batched screen diffs (changed line indices + full screen) |
 | `input` | Keyboard input events (requires input capture) |
-
-The server acknowledges with:
-
-```json
-{"subscribed": ["lines", "cursor", "diffs"]}
-```
 
 ### Step 3: Initial Sync
 
@@ -131,6 +170,154 @@ Use this to initialize your local state before processing incremental events.
 
 Events arrive as JSON text frames. Every event has an `event` field
 (discriminator) and a `seq` field (monotonically increasing sequence number).
+
+---
+
+## WebSocket Methods
+
+All methods can be called at any time after receiving `{"connected": true}`.
+Subscribe is not required first.
+
+### `subscribe`
+
+Start receiving real-time events. See Step 2 above for full details.
+
+**Params:** `events` (required), `interval_ms`, `format`
+
+**Result:** `{"events": ["lines", "cursor"]}`
+
+### `get_screen`
+
+Get the current visible screen. Same response shape as `GET /screen`.
+
+**Params:** `format` (`"plain"` | `"styled"`, default `"styled"`)
+
+**Result:**
+
+```json
+{"epoch": 42, "lines": [...], "cursor": {...}, "cols": 80, "rows": 24, "alternate_active": false, ...}
+```
+
+### `get_scrollback`
+
+Get scrollback buffer contents. Same response shape as `GET /scrollback`.
+
+**Params:** `format` (default `"styled"`), `offset` (default `0`), `limit` (default `100`)
+
+**Result:**
+
+```json
+{"epoch": 42, "lines": [...], "total_lines": 500, "offset": 0}
+```
+
+### `send_input`
+
+Inject bytes into the terminal's PTY.
+
+**Params:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `data` | string | (required) | The data to send |
+| `encoding` | `"utf8"` \| `"base64"` | `"utf8"` | How `data` is encoded |
+
+**Result:** `{}`
+
+### `get_input_mode`
+
+Get the current input mode.
+
+**Result:** `{"mode": "passthrough"}` or `{"mode": "capture"}`
+
+### `capture_input`
+
+Switch to capture mode. Keyboard input is intercepted and broadcast as events
+instead of being sent to the PTY.
+
+**Result:** `{}`
+
+### `release_input`
+
+Switch back to passthrough mode. Keyboard input goes to the PTY normally.
+
+**Result:** `{}`
+
+### `create_overlay`
+
+Create a positioned text overlay on the terminal.
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `x` | integer | yes | Column position |
+| `y` | integer | yes | Row position |
+| `z` | integer | no | Z-order (stacking) |
+| `spans` | array | yes | Array of span objects (see overlay docs) |
+
+**Result:** `{"id": "overlay-uuid"}`
+
+### `list_overlays`
+
+List all active overlays.
+
+**Result:** Array of overlay objects.
+
+### `get_overlay`
+
+Get a single overlay by id.
+
+**Params:** `id` (string, required)
+
+**Result:** Overlay object.
+
+### `update_overlay`
+
+Replace an overlay's spans.
+
+**Params:** `id` (string, required), `spans` (array, required)
+
+**Result:** `{}`
+
+### `patch_overlay`
+
+Move or reorder an overlay without replacing its content.
+
+**Params:** `id` (string, required), `x` (integer, optional), `y` (integer, optional), `z` (integer, optional)
+
+**Result:** `{}`
+
+### `delete_overlay`
+
+Delete an overlay.
+
+**Params:** `id` (string, required)
+
+**Result:** `{}`
+
+### `clear_overlays`
+
+Delete all overlays.
+
+**Result:** `{}`
+
+---
+
+## Error Responses
+
+Method errors include the request `id` and `method`:
+
+```json
+{"id": 3, "method": "get_overlay", "error": {"code": "overlay_not_found", "message": "No overlay exists with id 'abc-123'."}}
+```
+
+Protocol errors (malformed request) omit `id` and `method`:
+
+```json
+{"error": {"code": "invalid_request", "message": "Invalid JSON or missing 'method' field."}}
+```
+
+See [errors.md](errors.md) for the full error code reference.
 
 ---
 
@@ -293,7 +480,7 @@ If your WebSocket disconnects:
 
 1. Reconnect to the same endpoint
 2. The server sends `{"connected": true}` again
-3. Re-send your subscribe message
+3. Re-send your subscribe message (or any method calls you need)
 4. The server sends a fresh `sync` event with current state
 
 No state is lost. The terminal session continues regardless of client

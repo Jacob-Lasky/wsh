@@ -39,6 +39,7 @@ change between versions.
 | `400` | `invalid_overlay` | Invalid overlay: {detail}. | Invalid overlay specification |
 | `400` | `invalid_input_mode` | Invalid input mode: {detail}. | Invalid input mode value |
 | `400` | `invalid_format` | Invalid format: {detail}. | Invalid format query parameter |
+| --- | `unknown_method` | Unknown method '{method}'. | WebSocket method name not recognized |
 
 ### Server Errors
 

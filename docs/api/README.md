@@ -211,9 +211,13 @@ binary or text frames to inject input.
 
 ### JSON Event WebSocket (`/ws/json`)
 
-Structured event stream with subscription filtering. After connecting, you
-receive `{"connected": true}` and must send a subscribe message to begin
-receiving events.
+Structured request/response protocol over WebSocket. Supports method calls
+(query state, inject input, manage overlays) and event subscriptions. After
+connecting, you receive `{"connected": true}` and can send any method call:
+
+```json
+{"id": 1, "method": "get_screen", "params": {"format": "styled"}}
+```
 
 ## Overlays
 
