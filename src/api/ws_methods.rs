@@ -230,6 +230,119 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
             flush_overlays_to_stdout(&old, &[]);
             WsResponse::success(id, method, serde_json::json!({}))
         }
+        "create_overlay" => {
+            let params: CreateOverlayParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let overlay_id = state.overlays.create(params.x, params.y, params.z, params.spans);
+            let all = state.overlays.list();
+            flush_overlays_to_stdout(&[], &all);
+            WsResponse::success(id, method, serde_json::json!({ "id": overlay_id }))
+        }
+        "get_overlay" => {
+            let params: OverlayIdParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match state.overlays.get(&params.id) {
+                Some(overlay) => WsResponse::success(
+                    id,
+                    method,
+                    serde_json::to_value(&overlay).unwrap(),
+                ),
+                None => WsResponse::error(
+                    id,
+                    method,
+                    "overlay_not_found",
+                    &format!("No overlay exists with id '{}'.", params.id),
+                ),
+            }
+        }
+        "update_overlay" => {
+            let params: UpdateOverlayParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match state.overlays.get(&params.id) {
+                Some(o) => o,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "overlay_not_found",
+                        &format!("No overlay exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if state.overlays.update(&params.id, params.spans) {
+                flush_overlays_to_stdout(&[old], &state.overlays.list());
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "overlay_not_found",
+                    &format!("No overlay exists with id '{}'.", params.id),
+                )
+            }
+        }
+        "patch_overlay" => {
+            let params: PatchOverlayParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match state.overlays.get(&params.id) {
+                Some(o) => o,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "overlay_not_found",
+                        &format!("No overlay exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if state.overlays.move_to(&params.id, params.x, params.y, params.z) {
+                flush_overlays_to_stdout(&[old], &state.overlays.list());
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "overlay_not_found",
+                    &format!("No overlay exists with id '{}'.", params.id),
+                )
+            }
+        }
+        "delete_overlay" => {
+            let params: OverlayIdParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match state.overlays.get(&params.id) {
+                Some(o) => o,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "overlay_not_found",
+                        &format!("No overlay exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if state.overlays.delete(&params.id) {
+                flush_overlays_to_stdout(&[old], &state.overlays.list());
+                WsResponse::success(id, method, serde_json::json!({}))
+            } else {
+                WsResponse::error(
+                    id,
+                    method,
+                    "overlay_not_found",
+                    &format!("No overlay exists with id '{}'.", params.id),
+                )
+            }
+        }
         "get_screen" => {
             let params: ScreenParams = match parse_params(req) {
                 Ok(p) => p,
@@ -639,5 +752,117 @@ mod tests {
         let resp = dispatch(&req, &state).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn dispatch_create_overlay() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "create_overlay".to_string(),
+            params: Some(serde_json::json!({
+                "x": 10, "y": 5,
+                "spans": [{"text": "Hello"}]
+            })),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"]["id"].is_string());
+        assert_eq!(state.overlays.list().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_overlay() {
+        let (state, _rx) = create_test_state();
+        let id = state.overlays.create(5, 10, None, vec![crate::overlay::OverlaySpan {
+            text: "Test".to_string(),
+            fg: None, bg: None, bold: false, italic: false, underline: false,
+        }]);
+        let req = WsRequest {
+            id: None,
+            method: "get_overlay".to_string(),
+            params: Some(serde_json::json!({"id": id})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["x"], 5);
+        assert_eq!(json["result"]["y"], 10);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_overlay_not_found() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "get_overlay".to_string(),
+            params: Some(serde_json::json!({"id": "nonexistent"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "overlay_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_overlay() {
+        let (state, _rx) = create_test_state();
+        let id = state.overlays.create(0, 0, None, vec![crate::overlay::OverlaySpan {
+            text: "Old".to_string(),
+            fg: None, bg: None, bold: false, italic: false, underline: false,
+        }]);
+        let req = WsRequest {
+            id: None,
+            method: "update_overlay".to_string(),
+            params: Some(serde_json::json!({"id": id, "spans": [{"text": "New"}]})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = state.overlays.get(&id).unwrap();
+        assert_eq!(overlay.spans[0].text, "New");
+    }
+
+    #[tokio::test]
+    async fn dispatch_patch_overlay() {
+        let (state, _rx) = create_test_state();
+        let id = state.overlays.create(0, 0, None, vec![]);
+        let req = WsRequest {
+            id: None,
+            method: "patch_overlay".to_string(),
+            params: Some(serde_json::json!({"id": id, "x": 20, "y": 30})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let overlay = state.overlays.get(&id).unwrap();
+        assert_eq!(overlay.x, 20);
+        assert_eq!(overlay.y, 30);
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_overlay() {
+        let (state, _rx) = create_test_state();
+        let id = state.overlays.create(0, 0, None, vec![]);
+        let req = WsRequest {
+            id: None,
+            method: "delete_overlay".to_string(),
+            params: Some(serde_json::json!({"id": id})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert!(state.overlays.get(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_overlay_not_found() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "delete_overlay".to_string(),
+            params: Some(serde_json::json!({"id": "nonexistent"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "overlay_not_found");
     }
 }
