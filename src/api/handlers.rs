@@ -15,8 +15,10 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+use std::io::Write;
+
 use crate::input::Mode;
-use crate::overlay::{Overlay, OverlaySpan};
+use crate::overlay::{self, Overlay, OverlaySpan};
 use crate::parser::{
     events::{Event, EventType, Subscribe},
     state::{Format, Query, QueryResponse},
@@ -358,6 +360,26 @@ pub(super) async fn scrollback(
     Ok(Json(response))
 }
 
+/// Write erase+render sequences for overlays to stdout immediately.
+///
+/// Erases `to_erase` overlays, then renders `to_render` overlays, all wrapped
+/// in synchronized output to avoid tearing.
+fn flush_overlays_to_stdout(to_erase: &[Overlay], to_render: &[Overlay]) {
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    let _ = lock.write_all(overlay::begin_sync().as_bytes());
+    if !to_erase.is_empty() {
+        let erase = overlay::erase_all_overlays(to_erase);
+        let _ = lock.write_all(erase.as_bytes());
+    }
+    if !to_render.is_empty() {
+        let render = overlay::render_all_overlays(to_render);
+        let _ = lock.write_all(render.as_bytes());
+    }
+    let _ = lock.write_all(overlay::end_sync().as_bytes());
+    let _ = lock.flush();
+}
+
 // Overlay request/response types
 #[derive(Deserialize)]
 pub(super) struct CreateOverlayRequest {
@@ -390,6 +412,8 @@ pub(super) async fn overlay_create(
     Json(req): Json<CreateOverlayRequest>,
 ) -> (StatusCode, Json<CreateOverlayResponse>) {
     let id = state.overlays.create(req.x, req.y, req.z, req.spans);
+    let all = state.overlays.list();
+    flush_overlays_to_stdout(&[], &all);
     (StatusCode::CREATED, Json(CreateOverlayResponse { id }))
 }
 
@@ -413,7 +437,13 @@ pub(super) async fn overlay_update(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<UpdateOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let old = state
+        .overlays
+        .get(&id)
+        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if state.overlays.update(&id, req.spans) {
+        let all = state.overlays.list();
+        flush_overlays_to_stdout(&[old], &all);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -425,7 +455,13 @@ pub(super) async fn overlay_patch(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<PatchOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
+    let old = state
+        .overlays
+        .get(&id)
+        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if state.overlays.move_to(&id, req.x, req.y, req.z) {
+        let all = state.overlays.list();
+        flush_overlays_to_stdout(&[old], &all);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -436,7 +472,13 @@ pub(super) async fn overlay_delete(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    let old = state
+        .overlays
+        .get(&id)
+        .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if state.overlays.delete(&id) {
+        let remaining = state.overlays.list();
+        flush_overlays_to_stdout(&[old], &remaining);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -444,7 +486,9 @@ pub(super) async fn overlay_delete(
 }
 
 pub(super) async fn overlay_clear(State(state): State<AppState>) -> StatusCode {
+    let old_list = state.overlays.list();
     state.overlays.clear();
+    flush_overlays_to_stdout(&old_list, &[]);
     StatusCode::NO_CONTENT
 }
 

@@ -155,6 +155,79 @@ pub fn render_overlay(overlay: &Overlay) -> String {
     result
 }
 
+/// Returns the synchronized output begin sequence (DEC private mode 2026).
+///
+/// Tells the terminal to buffer subsequent output until `end_sync()` is received,
+/// then apply it atomically. Prevents visual tearing during erase+render cycles.
+pub fn begin_sync() -> &'static str {
+    "\x1b[?2026h"
+}
+
+/// Returns the synchronized output end sequence (DEC private mode 2026).
+pub fn end_sync() -> &'static str {
+    "\x1b[?2026l"
+}
+
+/// Returns `(row, col, width)` for each visual line of an overlay.
+///
+/// Replicates the newline-splitting logic from `render_overlay` but only computes
+/// geometry. Uses `len()` for width (ASCII approximation).
+pub fn overlay_line_extents(overlay: &Overlay) -> Vec<(u16, u16, u16)> {
+    let mut extents = Vec::new();
+    let mut current_row = overlay.y;
+    let mut current_width: u16 = 0;
+    let mut line_started = false;
+
+    for span in &overlay.spans {
+        let lines: Vec<&str> = span.text.split('\n').collect();
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                // Newline boundary: flush the current line
+                if line_started {
+                    extents.push((current_row, overlay.x, current_width));
+                }
+                current_row += 1;
+                current_width = 0;
+                line_started = false;
+            }
+            if !line.is_empty() {
+                current_width += line.len() as u16;
+                line_started = true;
+            }
+        }
+    }
+
+    // Flush the last line
+    if line_started {
+        extents.push((current_row, overlay.x, current_width));
+    }
+
+    extents
+}
+
+/// Generates ANSI sequences to erase a single overlay by overwriting with spaces.
+pub fn erase_overlay(overlay: &Overlay) -> String {
+    let mut result = String::new();
+    for (row, col, width) in overlay_line_extents(overlay) {
+        result.push_str(&cursor_position(row, col));
+        for _ in 0..width {
+            result.push(' ');
+        }
+    }
+    result
+}
+
+/// Generates ANSI sequences to erase all overlays, wrapped in cursor save/restore.
+pub fn erase_all_overlays(overlays: &[Overlay]) -> String {
+    let mut result = String::new();
+    result.push_str(save_cursor());
+    for overlay in overlays {
+        result.push_str(&erase_overlay(overlay));
+    }
+    result.push_str(restore_cursor());
+    result
+}
+
 /// Renders all overlays with cursor save/restore.
 ///
 /// Saves cursor at the start, renders all overlays, restores cursor at the end.
@@ -437,5 +510,170 @@ mod tests {
         assert!(result.contains("\x1b[4m"), "Expected underline");
         assert!(result.contains("Fancy"));
         assert!(result.ends_with("\x1b[0m"));
+    }
+
+    // --- Tests for new sync/erase functions ---
+
+    #[test]
+    fn test_begin_sync() {
+        assert_eq!(begin_sync(), "\x1b[?2026h");
+    }
+
+    #[test]
+    fn test_end_sync() {
+        assert_eq!(end_sync(), "\x1b[?2026l");
+    }
+
+    #[test]
+    fn test_overlay_line_extents_single_line() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 5,
+            y: 3,
+            z: 0,
+            spans: vec![OverlaySpan {
+                text: "hello".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+        };
+        let extents = overlay_line_extents(&overlay);
+        assert_eq!(extents, vec![(3, 5, 5)]);
+    }
+
+    #[test]
+    fn test_overlay_line_extents_multiline() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 0,
+            y: 0,
+            z: 0,
+            spans: vec![OverlaySpan {
+                text: "ab\ncde\nf".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+        };
+        let extents = overlay_line_extents(&overlay);
+        assert_eq!(extents, vec![(0, 0, 2), (1, 0, 3), (2, 0, 1)]);
+    }
+
+    #[test]
+    fn test_overlay_line_extents_multi_span() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 2,
+            y: 1,
+            z: 0,
+            spans: vec![
+                OverlaySpan {
+                    text: "ab".to_string(),
+                    fg: None,
+                    bg: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+                OverlaySpan {
+                    text: "cd".to_string(),
+                    fg: None,
+                    bg: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+            ],
+        };
+        let extents = overlay_line_extents(&overlay);
+        // Two spans on same line: width = 2 + 2 = 4
+        assert_eq!(extents, vec![(1, 2, 4)]);
+    }
+
+    #[test]
+    fn test_overlay_line_extents_newline_at_span_boundary() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 0,
+            y: 0,
+            z: 0,
+            spans: vec![
+                OverlaySpan {
+                    text: "ab\n".to_string(),
+                    fg: None,
+                    bg: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+                OverlaySpan {
+                    text: "cd".to_string(),
+                    fg: None,
+                    bg: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                },
+            ],
+        };
+        let extents = overlay_line_extents(&overlay);
+        // First span: "ab\n" -> line "ab" (width 2), then newline
+        // Second span: "cd" -> continues on the new row (width 2)
+        assert_eq!(extents, vec![(0, 0, 2), (1, 0, 2)]);
+    }
+
+    #[test]
+    fn test_erase_overlay_output() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 5,
+            y: 3,
+            z: 0,
+            spans: vec![OverlaySpan {
+                text: "hello".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+        };
+        let result = erase_overlay(&overlay);
+        // Should position cursor at (3,5) -> \x1b[4;6H then 5 spaces
+        assert_eq!(result, "\x1b[4;6H     ");
+    }
+
+    #[test]
+    fn test_erase_overlay_multiline() {
+        let overlay = Overlay {
+            id: "t".to_string(),
+            x: 0,
+            y: 0,
+            z: 0,
+            spans: vec![OverlaySpan {
+                text: "ab\ncde".to_string(),
+                fg: None,
+                bg: None,
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+        };
+        let result = erase_overlay(&overlay);
+        // Line 1: row 0, col 0, width 2 -> \x1b[1;1H + 2 spaces
+        // Line 2: row 1, col 0, width 3 -> \x1b[2;1H + 3 spaces
+        assert_eq!(result, "\x1b[1;1H  \x1b[2;1H   ");
+    }
+
+    #[test]
+    fn test_erase_all_overlays_empty() {
+        let result = erase_all_overlays(&[]);
+        // Just save + restore cursor, no erase sequences
+        assert_eq!(result, "\x1b[s\x1b[u");
     }
 }

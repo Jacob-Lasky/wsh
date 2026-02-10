@@ -239,14 +239,19 @@ fn spawn_pty_reader(
                 Ok(n) => {
                     let data = Bytes::copy_from_slice(&buf[..n]);
 
-                    // Forward PTY output
-                    let _ = stdout.write_all(&data);
-
-                    // Render overlays on top
+                    // Render overlays around PTY data to prevent scrollback smearing
                     let overlay_list = overlays.list();
                     if !overlay_list.is_empty() {
-                        let overlay_output = overlay::render_all_overlays(&overlay_list);
-                        let _ = stdout.write_all(overlay_output.as_bytes());
+                        let erase = overlay::erase_all_overlays(&overlay_list);
+                        let render = overlay::render_all_overlays(&overlay_list);
+                        // Use synchronized output so terminal applies atomically
+                        let _ = stdout.write_all(overlay::begin_sync().as_bytes());
+                        let _ = stdout.write_all(erase.as_bytes());
+                        let _ = stdout.write_all(&data);
+                        let _ = stdout.write_all(render.as_bytes());
+                        let _ = stdout.write_all(overlay::end_sync().as_bytes());
+                    } else {
+                        let _ = stdout.write_all(&data);
                     }
 
                     let _ = stdout.flush();
