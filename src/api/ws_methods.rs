@@ -1,0 +1,285 @@
+use serde::{Deserialize, Serialize};
+
+use crate::overlay::OverlaySpan;
+use crate::parser::events::EventType;
+use crate::parser::state::Format;
+
+// ---------------------------------------------------------------------------
+// Envelope types
+// ---------------------------------------------------------------------------
+
+/// Incoming WebSocket request (JSON-RPC-ish).
+#[derive(Debug, Deserialize)]
+pub struct WsRequest {
+    /// Optional request id, echoed back in the response.
+    pub id: Option<serde_json::Value>,
+    /// Method name (e.g. "get_screen", "send_input").
+    pub method: String,
+    /// Method-specific parameters.
+    pub params: Option<serde_json::Value>,
+}
+
+/// Outgoing WebSocket response.
+#[derive(Debug, Serialize)]
+pub struct WsResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<WsError>,
+}
+
+impl WsResponse {
+    /// Build a successful response.
+    pub fn success(
+        id: Option<serde_json::Value>,
+        method: &str,
+        result: serde_json::Value,
+    ) -> Self {
+        Self {
+            id,
+            method: Some(method.to_owned()),
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    /// Build an error response tied to a particular request.
+    pub fn error(
+        id: Option<serde_json::Value>,
+        method: &str,
+        code: &str,
+        message: &str,
+    ) -> Self {
+        Self {
+            id,
+            method: Some(method.to_owned()),
+            result: None,
+            error: Some(WsError {
+                code: code.to_owned(),
+                message: message.to_owned(),
+            }),
+        }
+    }
+
+    /// Build a protocol-level error (no method or id available).
+    pub fn protocol_error(code: &str, message: &str) -> Self {
+        Self {
+            id: None,
+            method: None,
+            result: None,
+            error: Some(WsError {
+                code: code.to_owned(),
+                message: message.to_owned(),
+            }),
+        }
+    }
+}
+
+/// Error payload inside a [`WsResponse`].
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WsError {
+    pub code: String,
+    pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// Method-specific param types
+// ---------------------------------------------------------------------------
+
+/// Parameters for the `subscribe` method.
+#[derive(Debug, Deserialize)]
+pub struct SubscribeParams {
+    pub events: Vec<EventType>,
+    #[serde(default = "default_interval")]
+    pub interval_ms: u64,
+    #[serde(default)]
+    pub format: Format,
+}
+
+fn default_interval() -> u64 {
+    100
+}
+
+/// Parameters for the `get_screen` method.
+#[derive(Debug, Deserialize)]
+pub struct ScreenParams {
+    #[serde(default)]
+    pub format: Format,
+}
+
+/// Parameters for the `get_scrollback` method.
+#[derive(Debug, Deserialize)]
+pub struct ScrollbackParams {
+    #[serde(default)]
+    pub format: Format,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "default_scrollback_limit")]
+    pub limit: usize,
+}
+
+fn default_scrollback_limit() -> usize {
+    100
+}
+
+/// Parameters for the `send_input` method.
+#[derive(Debug, Deserialize)]
+pub struct SendInputParams {
+    pub data: String,
+    #[serde(default)]
+    pub encoding: InputEncoding,
+}
+
+/// Encoding used for [`SendInputParams::data`].
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputEncoding {
+    #[default]
+    Utf8,
+    Base64,
+}
+
+// ---------------------------------------------------------------------------
+// Overlay param types
+// ---------------------------------------------------------------------------
+
+/// Parameters that identify an overlay by id (get / delete).
+#[derive(Debug, Deserialize)]
+pub struct OverlayIdParams {
+    pub id: String,
+}
+
+/// Parameters for creating a new overlay.
+#[derive(Debug, Deserialize)]
+pub struct CreateOverlayParams {
+    pub x: u16,
+    pub y: u16,
+    pub z: Option<i32>,
+    pub spans: Vec<OverlaySpan>,
+}
+
+/// Parameters for replacing an overlay's spans.
+#[derive(Debug, Deserialize)]
+pub struct UpdateOverlayParams {
+    pub id: String,
+    pub spans: Vec<OverlaySpan>,
+}
+
+/// Parameters for patching overlay position / z-order.
+#[derive(Debug, Deserialize)]
+pub struct PatchOverlayParams {
+    pub id: String,
+    pub x: Option<u16>,
+    pub y: Option<u16>,
+    pub z: Option<i32>,
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn deserialize_request_with_id() {
+        let raw = json!({
+            "id": 3,
+            "method": "get_screen",
+            "params": { "format": "styled" }
+        });
+        let req: WsRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(req.id, Some(json!(3)));
+        assert_eq!(req.method, "get_screen");
+        assert!(req.params.is_some());
+        let params = req.params.unwrap();
+        assert_eq!(params["format"], "styled");
+    }
+
+    #[test]
+    fn deserialize_request_without_id() {
+        let raw = json!({ "method": "capture_input" });
+        let req: WsRequest = serde_json::from_value(raw).unwrap();
+        assert!(req.id.is_none());
+        assert_eq!(req.method, "capture_input");
+        assert!(req.params.is_none());
+    }
+
+    #[test]
+    fn serialize_success_response() {
+        let resp = WsResponse::success(Some(json!(1)), "get_screen", json!({ "ok": true }));
+        let v = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["method"], "get_screen");
+        assert_eq!(v["result"]["ok"], true);
+        assert!(v.get("error").is_none());
+    }
+
+    #[test]
+    fn serialize_success_response_without_id() {
+        let resp = WsResponse::success(None, "get_screen", json!({ "ok": true }));
+        let v = serde_json::to_value(&resp).unwrap();
+        assert!(v.get("id").is_none());
+        assert_eq!(v["method"], "get_screen");
+        assert_eq!(v["result"]["ok"], true);
+    }
+
+    #[test]
+    fn serialize_error_response() {
+        let resp = WsResponse::error(Some(json!(5)), "bad_method", "not_found", "unknown method");
+        let v = serde_json::to_value(&resp).unwrap();
+        assert_eq!(v["id"], 5);
+        assert_eq!(v["method"], "bad_method");
+        assert_eq!(v["error"]["code"], "not_found");
+        assert_eq!(v["error"]["message"], "unknown method");
+        assert!(v.get("result").is_none());
+    }
+
+    #[test]
+    fn serialize_protocol_error_no_method() {
+        let resp = WsResponse::protocol_error("parse_error", "invalid JSON");
+        let v = serde_json::to_value(&resp).unwrap();
+        assert!(v.get("id").is_none());
+        assert!(v.get("method").is_none());
+        assert_eq!(v["error"]["code"], "parse_error");
+        assert_eq!(v["error"]["message"], "invalid JSON");
+    }
+
+    #[test]
+    fn deserialize_send_input_utf8() {
+        let raw = json!({ "data": "hello\r" });
+        let params: SendInputParams = serde_json::from_value(raw).unwrap();
+        assert_eq!(params.data, "hello\r");
+        assert_eq!(params.encoding, InputEncoding::Utf8);
+    }
+
+    #[test]
+    fn deserialize_send_input_base64() {
+        let raw = json!({ "data": "aGVsbG8=", "encoding": "base64" });
+        let params: SendInputParams = serde_json::from_value(raw).unwrap();
+        assert_eq!(params.data, "aGVsbG8=");
+        assert_eq!(params.encoding, InputEncoding::Base64);
+    }
+
+    #[test]
+    fn deserialize_subscribe_params() {
+        let raw = json!({
+            "events": ["lines", "cursor", "diffs"],
+            "interval_ms": 200,
+            "format": "plain"
+        });
+        let params: SubscribeParams = serde_json::from_value(raw).unwrap();
+        assert_eq!(params.events.len(), 3);
+        assert_eq!(params.events[0], EventType::Lines);
+        assert_eq!(params.events[1], EventType::Cursor);
+        assert_eq!(params.events[2], EventType::Diffs);
+        assert_eq!(params.interval_ms, 200);
+        assert_eq!(params.format, Format::Plain);
+    }
+}

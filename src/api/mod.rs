@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod error;
 mod handlers;
+pub mod ws_methods;
 
 use axum::{
     routing::{get, post},
