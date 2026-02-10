@@ -405,7 +405,7 @@ pub(super) async fn overlay_get(
         .overlays
         .get(&id)
         .map(Json)
-        .ok_or_else(|| ApiError::OverlayNotFound(id))
+        .ok_or(ApiError::OverlayNotFound(id))
 }
 
 pub(super) async fn overlay_update(
