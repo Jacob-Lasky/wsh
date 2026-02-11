@@ -118,6 +118,17 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
     },
+
+    /// Upgrade a running server to persistent mode (it won't shut down when sessions end)
+    Persist {
+        /// Address of the HTTP/WebSocket API server
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: SocketAddr,
+
+        /// Authentication token
+        #[arg(long, env = "WSH_TOKEN")]
+        token: Option<String>,
+    },
 }
 
 #[derive(Error, Debug)]
@@ -176,6 +187,9 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Kill { name, bind, token }) => {
             run_kill(name, bind, token).await
+        }
+        Some(Commands::Persist { bind, token }) => {
+            run_persist(bind, token).await
         }
         None => {
             run_standalone(cli).await
@@ -546,6 +560,28 @@ async fn run_kill(name: String, bind: SocketAddr, token: Option<String>) -> Resu
     })?;
 
     println!("Session '{}' killed.", name);
+    Ok(())
+}
+
+async fn run_persist(bind: SocketAddr, token: Option<String>) -> Result<(), WshError> {
+    let url = format!("http://{}/server/persist", bind);
+    let client = reqwest::Client::new();
+    let mut req = client.post(&url);
+    if let Some(t) = &token {
+        req = req.bearer_auth(t);
+    }
+
+    let resp = req.send().await.map_err(|e| {
+        eprintln!("wsh persist: failed to connect to server at {}: {}", bind, e);
+        WshError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e))
+    })?;
+
+    if !resp.status().is_success() {
+        eprintln!("wsh persist: server returned status {}", resp.status());
+        std::process::exit(1);
+    }
+
+    println!("Server upgraded to persistent mode.");
     Ok(())
 }
 
