@@ -3,53 +3,23 @@
 //! Tests verify the full CRUD flow for panels, visibility behavior when
 //! panels compete for space, and span-only updates vs layout-changing updates.
 
+mod common;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use bytes::Bytes;
-use tokio::sync::mpsc;
 use tower::ServiceExt;
-use wsh::api::{router, AppState};
-use wsh::broker::Broker;
-use wsh::input::{InputBroadcaster, InputMode};
-use wsh::overlay::OverlayStore;
-use wsh::parser::Parser;
-use wsh::session::{Session, SessionRegistry};
-use wsh::shutdown::ShutdownCoordinator;
+use wsh::api::router;
 
-/// Creates a test state with a specified terminal size.
-fn create_test_state_with_size(rows: u16, cols: u16) -> AppState {
-    let (input_tx, _) = mpsc::channel::<Bytes>(64);
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, cols as usize, rows as usize, 1000);
-    let session = Session {
-        name: "test".to_string(),
-        input_tx,
-        output_rx: broker.sender(),
-        shutdown: ShutdownCoordinator::new(),
-        parser,
-        overlays: OverlayStore::new(),
-        input_mode: InputMode::new(),
-        input_broadcaster: InputBroadcaster::new(),
-        panels: wsh::panel::PanelStore::new(),
-        pty: std::sync::Arc::new(
-            wsh::pty::Pty::spawn(rows, cols, wsh::pty::SpawnCommand::default())
-                .expect("failed to spawn PTY for test"),
-        ),
-        terminal_size: wsh::terminal::TerminalSize::new(rows, cols),
-        activity: wsh::activity::ActivityTracker::new(),
-    };
-    let registry = SessionRegistry::new();
-    registry.insert(Some("test".into()), session).unwrap();
-    AppState {
-        sessions: registry,
-        shutdown: ShutdownCoordinator::new(),
-    }
+fn create_test_state() -> wsh::api::AppState {
+    let (state, _, _) = common::create_test_state();
+    state
 }
 
-fn create_test_state() -> AppState {
-    create_test_state_with_size(24, 80)
+fn create_test_state_with_size(rows: u16, cols: u16) -> wsh::api::AppState {
+    let (state, _, _) = common::create_test_state_with_size(rows, cols);
+    state
 }
 
 async fn json_body(response: axum::http::Response<Body>) -> serde_json::Value {

@@ -56,6 +56,15 @@ unsafe impl Sync for Pty {}
 impl Pty {
     /// Spawn a PTY with the given dimensions and command configuration.
     pub fn spawn(rows: u16, cols: u16, spawn_cmd: SpawnCommand) -> Result<Self, PtyError> {
+        let cmd = Self::build_command(&spawn_cmd);
+        Self::spawn_with_cmd(rows, cols, cmd)
+    }
+
+    /// Spawn a PTY with the given dimensions and a pre-built CommandBuilder.
+    ///
+    /// Use this when you need to customize the command (e.g. set cwd or env)
+    /// before spawning.
+    pub fn spawn_with_cmd(rows: u16, cols: u16, cmd: CommandBuilder) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
         let size = PtySize {
@@ -67,16 +76,13 @@ impl Pty {
 
         let pair = pty_system.openpty(size).map_err(PtyError::OpenPty)?;
 
-        let cmd = Self::build_command(&spawn_cmd);
-        tracing::debug!(?spawn_cmd, "spawning command");
-
         let child = pair.slave.spawn_command(cmd).map_err(PtyError::SpawnCommand)?;
 
         Ok(Self { pair, child: Some(child) })
     }
 
     /// Build a CommandBuilder from the spawn configuration.
-    fn build_command(spawn_cmd: &SpawnCommand) -> CommandBuilder {
+    pub fn build_command(spawn_cmd: &SpawnCommand) -> CommandBuilder {
         let term = std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
 
         let mut cmd = match spawn_cmd {

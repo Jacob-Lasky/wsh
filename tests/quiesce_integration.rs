@@ -44,6 +44,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
         activity: activity.clone(),
+        is_local: false,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

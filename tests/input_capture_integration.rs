@@ -7,51 +7,18 @@
 //! - Release with POST /input/release
 //! - Verify mode is passthrough
 
+mod common;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use bytes::Bytes;
-use tokio::sync::mpsc;
 use tower::ServiceExt;
-use wsh::api::{router, AppState};
-use wsh::broker::Broker;
-use wsh::input::{InputBroadcaster, InputMode};
-use wsh::overlay::OverlayStore;
-use wsh::parser::Parser;
-use wsh::session::{Session, SessionRegistry};
-use wsh::shutdown::ShutdownCoordinator;
-
-/// Creates a test state for integration tests.
-fn create_test_state() -> AppState {
-    let (input_tx, _) = mpsc::channel::<Bytes>(64);
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let session = Session {
-        name: "test".to_string(),
-        input_tx,
-        output_rx: broker.sender(),
-        shutdown: ShutdownCoordinator::new(),
-        parser,
-        overlays: OverlayStore::new(),
-        input_mode: InputMode::new(),
-        input_broadcaster: InputBroadcaster::new(),
-        panels: wsh::panel::PanelStore::new(),
-        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
-        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
-        activity: wsh::activity::ActivityTracker::new(),
-    };
-    let registry = SessionRegistry::new();
-    registry.insert(Some("test".into()), session).unwrap();
-    AppState {
-        sessions: registry,
-        shutdown: ShutdownCoordinator::new(),
-    }
-}
+use wsh::api::router;
 
 #[tokio::test]
 async fn test_input_capture_flow() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Step 1: Verify default mode is passthrough
@@ -146,7 +113,7 @@ async fn test_input_capture_flow() {
 
 #[tokio::test]
 async fn test_input_capture_idempotent() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Capture multiple times should be idempotent
@@ -221,7 +188,7 @@ async fn test_input_capture_idempotent() {
 
 #[tokio::test]
 async fn test_input_mode_wrong_method() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // POST on /input/mode should fail (only GET is allowed)
@@ -272,7 +239,7 @@ async fn test_input_mode_wrong_method() {
 #[tokio::test]
 async fn test_input_mode_state_shared_across_requests() {
     // Test that state is properly shared across multiple requests
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Capture mode

@@ -523,6 +523,69 @@ struct SubHandle {
     task: tokio::task::JoinHandle<()>,
 }
 
+/// Convert a registry-level SessionEvent to a JSON value for the WS protocol.
+/// Also handles cleanup of subscription handles on rename/destroy.
+fn format_registry_event(
+    event: &crate::session::SessionEvent,
+    sub_handles: &mut std::collections::HashMap<String, SubHandle>,
+) -> serde_json::Value {
+    match event {
+        crate::session::SessionEvent::Created { name } => {
+            serde_json::json!({
+                "event": "session_created",
+                "params": { "name": name }
+            })
+        }
+        crate::session::SessionEvent::Exited { name } => {
+            serde_json::json!({
+                "event": "session_exited",
+                "params": { "name": name }
+            })
+        }
+        crate::session::SessionEvent::Renamed { old_name, new_name } => {
+            if let Some(handle) = sub_handles.remove(old_name.as_str()) {
+                sub_handles.insert(new_name.clone(), handle);
+            }
+            serde_json::json!({
+                "event": "session_renamed",
+                "params": { "old_name": old_name, "new_name": new_name }
+            })
+        }
+        crate::session::SessionEvent::Destroyed { name } => {
+            if let Some(handle) = sub_handles.remove(name) {
+                handle.task.abort();
+            }
+            serde_json::json!({
+                "event": "session_destroyed",
+                "params": { "name": name }
+            })
+        }
+    }
+}
+
+/// Check if a per-session tagged event should be forwarded based on subscription filters.
+fn should_forward_session_event(
+    event: &crate::parser::events::Event,
+    handle: &SubHandle,
+) -> bool {
+    match event {
+        crate::parser::events::Event::Line { .. } => {
+            handle.subscribed_types.contains(&EventType::Lines)
+        }
+        crate::parser::events::Event::Cursor { .. } => {
+            handle.subscribed_types.contains(&EventType::Cursor)
+        }
+        crate::parser::events::Event::Mode { .. } => {
+            handle.subscribed_types.contains(&EventType::Mode)
+        }
+        crate::parser::events::Event::Diff { .. } => {
+            handle.subscribed_types.contains(&EventType::Diffs)
+        }
+        crate::parser::events::Event::Reset { .. }
+        | crate::parser::events::Event::Sync { .. } => true,
+    }
+}
+
 async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let (_guard, mut shutdown_rx) = state.shutdown.register();
     let (mut ws_tx, mut ws_rx) = socket.split();
@@ -551,8 +614,6 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     // Main event loop
     loop {
         tokio::select! {
-            biased;
-
             // Incoming client message
             msg = ws_rx.next() => {
                 match msg {
@@ -637,30 +698,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
             result = registry_rx.recv() => {
                 match result {
                     Ok(event) => {
-                        let event_json = match &event {
-                            crate::session::SessionEvent::Created { name } => {
-                                serde_json::json!({
-                                    "event": "session_created",
-                                    "params": { "name": name }
-                                })
-                            }
-                            crate::session::SessionEvent::Exited { name } => {
-                                serde_json::json!({
-                                    "event": "session_exited",
-                                    "params": { "name": name }
-                                })
-                            }
-                            crate::session::SessionEvent::Destroyed { name } => {
-                                // Clean up any subscription for this session
-                                if let Some(handle) = sub_handles.remove(name) {
-                                    handle.task.abort();
-                                }
-                                serde_json::json!({
-                                    "event": "session_destroyed",
-                                    "params": { "name": name }
-                                })
-                            }
-                        };
+                        let event_json = format_registry_event(&event, &mut sub_handles);
                         if let Ok(json) = serde_json::to_string(&event_json) {
                             if ws_tx.send(Message::Text(json)).await.is_err() {
                                 break;
@@ -674,27 +712,8 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
 
             // Per-session parser events forwarded from subscription tasks
             Some(tagged) = sub_rx.recv() => {
-                // Check if we should forward this event based on subscription filter
                 if let Some(handle) = sub_handles.get(&tagged.session) {
-                    let should_send = match &tagged.event {
-                        crate::parser::events::Event::Line { .. } => {
-                            handle.subscribed_types.contains(&EventType::Lines)
-                        }
-                        crate::parser::events::Event::Cursor { .. } => {
-                            handle.subscribed_types.contains(&EventType::Cursor)
-                        }
-                        crate::parser::events::Event::Mode { .. } => {
-                            handle.subscribed_types.contains(&EventType::Mode)
-                        }
-                        crate::parser::events::Event::Diff { .. } => {
-                            handle.subscribed_types.contains(&EventType::Diffs)
-                        }
-                        crate::parser::events::Event::Reset { .. }
-                        | crate::parser::events::Event::Sync { .. } => true,
-                    };
-
-                    if should_send {
-                        // Tag the event with the session name
+                    if should_forward_session_event(&tagged.event, handle) {
                         if let Ok(event_value) = serde_json::to_value(&tagged.event) {
                             let tagged_json = if let serde_json::Value::Object(mut map) = event_value {
                                 map.insert("session".to_string(), serde_json::json!(tagged.session));
@@ -755,6 +774,8 @@ async fn handle_server_ws_request(
                 command: Option<String>,
                 rows: Option<u16>,
                 cols: Option<u16>,
+                cwd: Option<String>,
+                env: Option<std::collections::HashMap<String, String>>,
             }
             let params: CreateParams = match &req.params {
                 Some(v) => match serde_json::from_value(v.clone()) {
@@ -773,6 +794,8 @@ async fn handle_server_ws_request(
                     command: None,
                     rows: None,
                     cols: None,
+                    cwd: None,
+                    env: None,
                 },
             };
 
@@ -790,8 +813,8 @@ async fn handle_server_ws_request(
             let rows = params.rows.unwrap_or(24);
             let cols = params.cols.unwrap_or(80);
 
-            let (session, _child_exit_rx) =
-                match Session::spawn("".to_string(), command, rows, cols) {
+            let (session, child_exit_rx) =
+                match Session::spawn_with_options("".to_string(), command, rows, cols, params.cwd, params.env) {
                     Ok(result) => result,
                     Err(e) => {
                         return Some(super::ws_methods::WsResponse::error(
@@ -805,6 +828,8 @@ async fn handle_server_ws_request(
 
             match state.sessions.insert(params.name, session) {
                 Ok(assigned_name) => {
+                    // Monitor child exit so we emit SessionEvent::Exited.
+                    state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
                     return Some(super::ws_methods::WsResponse::success(
                         id,
                         method,
@@ -953,11 +978,11 @@ async fn handle_server_ws_request(
         }
 
         "set_server_mode" => {
-            // Placeholder: accept {"persist": true}, return ok
-            return Some(super::ws_methods::WsResponse::success(
+            return Some(super::ws_methods::WsResponse::error(
                 id,
                 method,
-                serde_json::json!({}),
+                "not_implemented",
+                "set_server_mode is not yet implemented",
             ));
         }
 
@@ -1225,8 +1250,10 @@ pub(super) async fn overlay_create(
 ) -> Result<(StatusCode, Json<CreateOverlayResponse>), ApiError> {
     let session = get_session(&state.sessions, &name)?;
     let id = session.overlays.create(req.x, req.y, req.z, req.spans);
-    let all = session.overlays.list();
-    flush_overlays_to_stdout(&[], &all);
+    if session.is_local {
+        let all = session.overlays.list();
+        flush_overlays_to_stdout(&[], &all);
+    }
     Ok((StatusCode::CREATED, Json(CreateOverlayResponse { id })))
 }
 
@@ -1261,8 +1288,10 @@ pub(super) async fn overlay_update(
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.update(&id, req.spans) {
-        let all = session.overlays.list();
-        flush_overlays_to_stdout(&[old], &all);
+        if session.is_local {
+            let all = session.overlays.list();
+            flush_overlays_to_stdout(&[old], &all);
+        }
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1280,8 +1309,10 @@ pub(super) async fn overlay_patch(
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.move_to(&id, req.x, req.y, req.z) {
-        let all = session.overlays.list();
-        flush_overlays_to_stdout(&[old], &all);
+        if session.is_local {
+            let all = session.overlays.list();
+            flush_overlays_to_stdout(&[old], &all);
+        }
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1298,8 +1329,10 @@ pub(super) async fn overlay_delete(
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
     if session.overlays.delete(&id) {
-        let remaining = session.overlays.list();
-        flush_overlays_to_stdout(&[old], &remaining);
+        if session.is_local {
+            let remaining = session.overlays.list();
+            flush_overlays_to_stdout(&[old], &remaining);
+        }
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::OverlayNotFound(id))
@@ -1313,7 +1346,9 @@ pub(super) async fn overlay_clear(
     let session = get_session(&state.sessions, &name)?;
     let old_list = session.overlays.list();
     session.overlays.clear();
-    flush_overlays_to_stdout(&old_list, &[]);
+    if session.is_local {
+        flush_overlays_to_stdout(&old_list, &[]);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1534,6 +1569,8 @@ pub(super) struct CreateSessionRequest {
     pub command: Option<String>,
     pub rows: Option<u16>,
     pub cols: Option<u16>,
+    pub cwd: Option<String>,
+    pub env: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Serialize)]
@@ -1575,8 +1612,9 @@ pub(super) async fn session_create(
     let cols = req.cols.unwrap_or(80);
 
     // Use a placeholder name for spawn; registry.insert will assign the real name.
-    let (session, _child_exit_rx) = Session::spawn("".to_string(), command, rows, cols)
-        .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
+    let (session, child_exit_rx) =
+        Session::spawn_with_options("".to_string(), command, rows, cols, req.cwd, req.env)
+            .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
 
     let assigned_name = state
         .sessions
@@ -1585,6 +1623,9 @@ pub(super) async fn session_create(
             RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
             RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         })?;
+
+    // Monitor child exit so we emit SessionEvent::Exited when the process dies.
+    state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
 
     Ok((
         StatusCode::CREATED,
@@ -1629,5 +1670,5 @@ pub(super) async fn session_kill(
 }
 
 pub(super) async fn server_persist() -> StatusCode {
-    StatusCode::NO_CONTENT
+    StatusCode::NOT_IMPLEMENTED
 }

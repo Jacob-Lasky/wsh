@@ -7,51 +7,18 @@
 //! - Delete overlay with DELETE /overlay/:id
 //! - Verify deleted overlay returns 404
 
+mod common;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use bytes::Bytes;
-use tokio::sync::mpsc;
 use tower::ServiceExt;
-use wsh::api::{router, AppState};
-use wsh::broker::Broker;
-use wsh::input::{InputBroadcaster, InputMode};
-use wsh::overlay::OverlayStore;
-use wsh::parser::Parser;
-use wsh::session::{Session, SessionRegistry};
-use wsh::shutdown::ShutdownCoordinator;
-
-/// Creates a test state for integration tests.
-fn create_test_state() -> AppState {
-    let (input_tx, _) = mpsc::channel::<Bytes>(64);
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let session = Session {
-        name: "test".to_string(),
-        input_tx,
-        output_rx: broker.sender(),
-        shutdown: ShutdownCoordinator::new(),
-        parser,
-        overlays: OverlayStore::new(),
-        input_mode: InputMode::new(),
-        input_broadcaster: InputBroadcaster::new(),
-        panels: wsh::panel::PanelStore::new(),
-        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
-        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
-        activity: wsh::activity::ActivityTracker::new(),
-    };
-    let registry = SessionRegistry::new();
-    registry.insert(Some("test".into()), session).unwrap();
-    AppState {
-        sessions: registry,
-        shutdown: ShutdownCoordinator::new(),
-    }
-}
+use wsh::api::router;
 
 #[tokio::test]
 async fn test_overlay_crud_flow() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Step 1: Create overlay with styled span (yellow, bold)
@@ -196,7 +163,7 @@ async fn test_overlay_crud_flow() {
 
 #[tokio::test]
 async fn test_overlay_list_and_clear() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Create two overlays
@@ -297,7 +264,7 @@ async fn test_overlay_list_and_clear() {
 
 #[tokio::test]
 async fn test_overlay_patch_position() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Create overlay
@@ -373,7 +340,7 @@ async fn test_overlay_patch_position() {
 
 #[tokio::test]
 async fn test_overlay_not_found() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     // Try to get non-existent overlay

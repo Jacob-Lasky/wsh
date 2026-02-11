@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use tokio::sync::broadcast as tokio_broadcast;
 
@@ -33,6 +34,10 @@ pub struct Session {
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
     pub activity: ActivityTracker,
+    /// Whether this session is attached to the local terminal (stdout).
+    /// Only the standalone-mode session should have this set to `true`.
+    /// Controls whether overlay/panel ANSI escape sequences are written to stdout.
+    pub is_local: bool,
 }
 
 impl Session {
@@ -50,7 +55,28 @@ impl Session {
         rows: u16,
         cols: u16,
     ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), PtyError> {
-        let mut pty = Pty::spawn(rows, cols, command)?;
+        Self::spawn_with_options(name, command, rows, cols, None, None)
+    }
+
+    /// Spawn a new session with optional cwd and environment overrides.
+    pub fn spawn_with_options(
+        name: String,
+        command: SpawnCommand,
+        rows: u16,
+        cols: u16,
+        cwd: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+    ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), PtyError> {
+        let mut cmd = Pty::build_command(&command);
+        if let Some(ref dir) = cwd {
+            cmd.cwd(dir);
+        }
+        if let Some(ref vars) = env {
+            for (k, v) in vars {
+                cmd.env(k, v);
+            }
+        }
+        let mut pty = Pty::spawn_with_cmd(rows, cols, cmd)?;
         let pty_reader = pty.take_reader()?;
         let pty_writer = pty.take_writer()?;
         let pty_child = pty.take_child();
@@ -129,6 +155,7 @@ impl Session {
                 input_mode,
                 input_broadcaster,
                 activity,
+                is_local: false,
             },
             child_exit_rx,
         ))
@@ -140,6 +167,7 @@ impl Session {
 pub enum SessionEvent {
     Created { name: String },
     Exited { name: String },
+    Renamed { old_name: String, new_name: String },
     Destroyed { name: String },
 }
 
@@ -189,7 +217,7 @@ impl SessionRegistry {
         name: Option<String>,
         mut session: Session,
     ) -> Result<String, RegistryError> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         let assigned_name = match name {
             Some(n) => {
@@ -224,7 +252,7 @@ impl SessionRegistry {
 
     /// Look up a session by name, returning a clone if found.
     pub fn get(&self, name: &str) -> Option<Session> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner.sessions.get(name).cloned()
     }
 
@@ -232,7 +260,7 @@ impl SessionRegistry {
     ///
     /// Emits a `SessionEvent::Destroyed` event when a session is removed.
     pub fn remove(&self, name: &str) -> Option<Session> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
         let removed = inner.sessions.remove(name);
         if removed.is_some() {
             let _ = self.events_tx.send(SessionEvent::Destroyed {
@@ -248,7 +276,7 @@ impl SessionRegistry {
     /// `RegistryError::NameExists` if `new_name` is already taken.
     /// Updates the session's `name` field to `new_name`.
     pub fn rename(&self, old_name: &str, new_name: &str) -> Result<(), RegistryError> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write();
 
         if !inner.sessions.contains_key(old_name) {
             return Err(RegistryError::NotFound(old_name.to_string()));
@@ -260,24 +288,49 @@ impl SessionRegistry {
         let mut session = inner.sessions.remove(old_name).unwrap();
         session.name = new_name.to_string();
         inner.sessions.insert(new_name.to_string(), session);
+
+        let _ = self.events_tx.send(SessionEvent::Renamed {
+            old_name: old_name.to_string(),
+            new_name: new_name.to_string(),
+        });
+
         Ok(())
     }
 
     /// Return all session names.
     pub fn list(&self) -> Vec<String> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner.sessions.keys().cloned().collect()
     }
 
     /// Return the number of sessions.
     pub fn len(&self) -> usize {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner.sessions.len()
     }
 
     /// Subscribe to session lifecycle events.
     pub fn subscribe_events(&self) -> tokio_broadcast::Receiver<SessionEvent> {
         self.events_tx.subscribe()
+    }
+
+    /// Monitor a session's child process exit and emit `SessionEvent::Exited`.
+    ///
+    /// Spawns a background task that waits on `child_exit_rx`. When the child
+    /// exits, the `Exited` event is broadcast to all subscribers. This should
+    /// be called for API-created sessions where the caller would otherwise
+    /// discard the exit receiver.
+    pub fn monitor_child_exit(
+        &self,
+        name: String,
+        child_exit_rx: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let events_tx = self.events_tx.clone();
+        tokio::spawn(async move {
+            let _ = child_exit_rx.await;
+            tracing::info!(session = %name, "session child process exited");
+            let _ = events_tx.send(SessionEvent::Exited { name });
+        });
     }
 }
 
@@ -307,6 +360,7 @@ mod tests {
             input_mode: InputMode::new(),
             input_broadcaster: InputBroadcaster::new(),
             activity: ActivityTracker::new(),
+            is_local: false,
         };
         (session, input_rx)
     }
@@ -510,6 +564,102 @@ mod tests {
         assert!(
             matches!(ev2, SessionEvent::Destroyed { ref name } if name == "evt"),
             "expected Destroyed {{ name: \"evt\" }}, got: {ev2:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_emits_renamed_event() {
+        let registry = SessionRegistry::new();
+        let mut rx = registry.subscribe_events();
+
+        registry
+            .insert(Some("old".to_string()), make_test_session("x"))
+            .unwrap();
+        // Drain the Created event
+        let _ = rx.recv().await.unwrap();
+
+        registry.rename("old", "new").unwrap();
+
+        let ev = rx.recv().await.expect("should receive Renamed event");
+        assert!(
+            matches!(ev, SessionEvent::Renamed { ref old_name, ref new_name }
+                if old_name == "old" && new_name == "new"),
+            "expected Renamed {{ old_name: \"old\", new_name: \"new\" }}, got: {ev:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_spawn_creates_session_with_child_exit() {
+        let (session, child_exit_rx) = Session::spawn(
+            "spawned".to_string(),
+            crate::pty::SpawnCommand::default(),
+            24,
+            80,
+        )
+        .expect("Session::spawn should succeed");
+
+        assert_eq!(session.name, "spawned");
+        assert!(!session.is_local);
+
+        // Send input to make the shell exit
+        session
+            .input_tx
+            .send(bytes::Bytes::from_static(b"exit\n"))
+            .await
+            .expect("should send input");
+
+        // The child exit receiver should fire
+        tokio::time::timeout(std::time::Duration::from_secs(5), child_exit_rx)
+            .await
+            .expect("child_exit_rx should fire within timeout")
+            .expect("oneshot should not be dropped");
+    }
+
+    #[tokio::test]
+    async fn session_spawn_with_options_applies_env() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("WSH_TEST_VAR".to_string(), "hello_wsh".to_string());
+
+        let (session, _child_exit_rx) = Session::spawn_with_options(
+            "env-test".to_string(),
+            crate::pty::SpawnCommand::default(),
+            24,
+            80,
+            None,
+            Some(env),
+        )
+        .expect("Session::spawn_with_options should succeed");
+
+        assert_eq!(session.name, "env-test");
+
+        // Subscribe BEFORE sending input so we don't miss the output
+        let mut output_rx = session.output_rx.subscribe();
+
+        // Give the shell time to start, then send the echo command
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        session
+            .input_tx
+            .send(bytes::Bytes::from_static(b"echo $WSH_TEST_VAR\n"))
+            .await
+            .expect("should send input");
+
+        let mut collected = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout_at(deadline, output_rx.recv()).await {
+                Ok(Ok(data)) => {
+                    collected.extend_from_slice(&data);
+                    if String::from_utf8_lossy(&collected).contains("hello_wsh") {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        let output = String::from_utf8_lossy(&collected);
+        assert!(
+            output.contains("hello_wsh"),
+            "expected output to contain 'hello_wsh', got: {output}"
         );
     }
 }

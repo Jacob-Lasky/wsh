@@ -122,7 +122,8 @@ async fn main() -> Result<(), WshError> {
     };
 
     // Spawn the session: this creates the PTY, broker, parser, and I/O tasks
-    let (session, child_exit_rx) = Session::spawn("default".to_string(), spawn_cmd, rows, cols)?;
+    let (mut session, child_exit_rx) = Session::spawn("default".to_string(), spawn_cmd, rows, cols)?;
+    session.is_local = true;
     tracing::debug!("session spawned");
 
     // Subscribe to the session output for local terminal display (stdout passthrough)

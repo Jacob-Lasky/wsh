@@ -79,6 +79,7 @@ async fn test_concurrent_input_from_multiple_sources() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        is_local: false,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -233,6 +234,7 @@ async fn test_rapid_http_requests() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+        is_local: false,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

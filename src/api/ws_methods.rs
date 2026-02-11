@@ -299,7 +299,9 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
         "clear_overlays" => {
             let old = session.overlays.list();
             session.overlays.clear();
-            flush_overlays_to_stdout(&old, &[]);
+            if session.is_local {
+                flush_overlays_to_stdout(&old, &[]);
+            }
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "create_overlay" => {
@@ -308,8 +310,10 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Err(e) => return e,
             };
             let overlay_id = session.overlays.create(params.x, params.y, params.z, params.spans);
-            let all = session.overlays.list();
-            flush_overlays_to_stdout(&[], &all);
+            if session.is_local {
+                let all = session.overlays.list();
+                flush_overlays_to_stdout(&[], &all);
+            }
             WsResponse::success(id, method, serde_json::json!({ "id": overlay_id }))
         }
         "get_overlay" => {
@@ -348,7 +352,9 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 }
             };
             if session.overlays.update(&params.id, params.spans) {
-                flush_overlays_to_stdout(&[old], &session.overlays.list());
+                if session.is_local {
+                    flush_overlays_to_stdout(&[old], &session.overlays.list());
+                }
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -376,7 +382,9 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 }
             };
             if session.overlays.move_to(&params.id, params.x, params.y, params.z) {
-                flush_overlays_to_stdout(&[old], &session.overlays.list());
+                if session.is_local {
+                    flush_overlays_to_stdout(&[old], &session.overlays.list());
+                }
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -404,7 +412,9 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 }
             };
             if session.overlays.delete(&params.id) {
-                flush_overlays_to_stdout(&[old], &session.overlays.list());
+                if session.is_local {
+                    flush_overlays_to_stdout(&[old], &session.overlays.list());
+                }
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -813,6 +823,7 @@ mod tests {
             pty: std::sync::Arc::new(crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             activity: crate::activity::ActivityTracker::new(),
+            is_local: false,
         };
         (session, input_rx)
     }

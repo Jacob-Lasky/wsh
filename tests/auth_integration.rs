@@ -7,51 +7,18 @@
 //! - Wrong token returns 403
 //! - No auth enforcement when token is None
 
+mod common;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use bytes::Bytes;
-use tokio::sync::mpsc;
 use tower::ServiceExt;
-use wsh::api::{router, AppState};
-use wsh::broker::Broker;
-use wsh::input::{InputBroadcaster, InputMode};
-use wsh::overlay::OverlayStore;
-use wsh::parser::Parser;
-use wsh::session::{Session, SessionRegistry};
-use wsh::shutdown::ShutdownCoordinator;
-
-/// Creates a test state for integration tests.
-fn create_test_state() -> AppState {
-    let (input_tx, _) = mpsc::channel::<Bytes>(64);
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let session = Session {
-        name: "test".to_string(),
-        input_tx,
-        output_rx: broker.sender(),
-        shutdown: ShutdownCoordinator::new(),
-        parser,
-        overlays: OverlayStore::new(),
-        input_mode: InputMode::new(),
-        input_broadcaster: InputBroadcaster::new(),
-        panels: wsh::panel::PanelStore::new(),
-        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
-        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
-        activity: wsh::activity::ActivityTracker::new(),
-    };
-    let registry = SessionRegistry::new();
-    registry.insert(Some("test".into()), session).unwrap();
-    AppState {
-        sessions: registry,
-        shutdown: ShutdownCoordinator::new(),
-    }
-}
+use wsh::api::router;
 
 #[tokio::test]
 async fn test_auth_required_on_protected_routes() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, Some("test-token".to_string()));
 
     let response = app
@@ -75,7 +42,7 @@ async fn test_auth_required_on_protected_routes() {
 
 #[tokio::test]
 async fn test_health_exempt_from_auth() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, Some("test-token".to_string()));
 
     let response = app
@@ -93,7 +60,7 @@ async fn test_health_exempt_from_auth() {
 
 #[tokio::test]
 async fn test_bearer_token_grants_access() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, Some("test-token".to_string()));
 
     let response = app
@@ -112,7 +79,7 @@ async fn test_bearer_token_grants_access() {
 
 #[tokio::test]
 async fn test_query_param_token_grants_access() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, Some("test-token".to_string()));
 
     let response = app
@@ -130,7 +97,7 @@ async fn test_query_param_token_grants_access() {
 
 #[tokio::test]
 async fn test_wrong_token_returns_403() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, Some("test-token".to_string()));
 
     let response = app
@@ -155,7 +122,7 @@ async fn test_wrong_token_returns_403() {
 
 #[tokio::test]
 async fn test_no_auth_when_token_is_none() {
-    let state = create_test_state();
+    let (state, _, _) = common::create_test_state();
     let app = router(state, None);
 
     let response = app

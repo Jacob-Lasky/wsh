@@ -138,6 +138,7 @@ mod tests {
             input_mode: InputMode::new(),
             input_broadcaster: crate::input::InputBroadcaster::new(),
             activity: ActivityTracker::new(),
+            is_local: false,
         };
         let registry = crate::session::SessionRegistry::new();
         registry.insert(Some("test".into()), session).unwrap();
@@ -931,7 +932,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_server_persist_returns_204() {
+    async fn test_server_persist_returns_501() {
         let state = create_empty_state();
         let app = router(state, None);
 
@@ -946,6 +947,6 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     }
 }

@@ -578,8 +578,8 @@ async fn test_server_ws_set_server_mode() {
     let resp = recv_json(&mut rx).await;
     assert_eq!(resp["id"], 1);
     assert_eq!(resp["method"], "set_server_mode");
-    assert!(resp["result"].is_object());
-    assert!(resp.get("error").is_none());
+    assert!(resp["error"].is_object());
+    assert_eq!(resp["error"]["code"], "not_implemented");
 }
 
 // ── Test: duplicate session name ────────────────────────────────
