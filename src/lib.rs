@@ -2,6 +2,7 @@ pub mod api;
 pub mod broker;
 pub mod input;
 pub mod overlay;
+pub mod panel;
 pub mod parser;
 pub mod pty;
 pub mod shutdown;
