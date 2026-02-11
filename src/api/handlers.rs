@@ -802,10 +802,10 @@ async fn handle_server_ws_request(
             let command = match params.command {
                 Some(cmd) => SpawnCommand::Command {
                     command: cmd,
-                    interactive: false,
+                    interactive: true,
                 },
                 None => SpawnCommand::Shell {
-                    interactive: false,
+                    interactive: true,
                     shell: None,
                 },
             };
@@ -1604,10 +1604,10 @@ pub(super) async fn session_create(
     let command = match req.command {
         Some(cmd) => SpawnCommand::Command {
             command: cmd,
-            interactive: false,
+            interactive: true,
         },
         None => SpawnCommand::Shell {
-            interactive: false,
+            interactive: true,
             shell: None,
         },
     };

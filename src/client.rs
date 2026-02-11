@@ -189,7 +189,7 @@ impl Client {
         token: &Option<String>,
         name: &str,
     ) -> io::Result<()> {
-        let url = format!("http://{}/sessions/{}", bind, name);
+        let url = format!("http://{}/sessions/{}", bind, url_encode_name(name));
         let client = reqwest::Client::new();
         let mut req = client.delete(&url);
         if let Some(t) = token {
@@ -217,6 +217,22 @@ impl Client {
 
         Ok(())
     }
+}
+
+/// Percent-encode a session name for use in URL paths.
+fn url_encode_name(name: &str) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => encoded.push(c),
+            _ => {
+                for b in c.to_string().as_bytes() {
+                    encoded.push_str(&format!("%{:02X}", b));
+                }
+            }
+        }
+    }
+    encoded
 }
 
 /// Session info returned by the list endpoint.

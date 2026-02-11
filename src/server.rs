@@ -290,6 +290,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     let pty = session.pty.clone();
     let parser = session.parser.clone();
     let activity = session.activity.clone();
+    let terminal_size = session.terminal_size.clone();
 
     // Main loop: read from client and session output concurrently
     loop {
@@ -321,6 +322,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                             }
                             FrameType::Resize => {
                                 if let Ok(msg) = f.parse_json::<ResizeMsg>() {
+                                    terminal_size.set(msg.rows, msg.cols);
                                     if let Err(e) = pty.resize(msg.rows, msg.cols) {
                                         tracing::warn!(?e, "failed to resize PTY");
                                     }

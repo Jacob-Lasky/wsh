@@ -735,6 +735,29 @@ Destroy a session.
 
 **Result:** `{}`
 
+#### `rename_session`
+
+Rename an existing session.
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Current session name |
+| `new_name` | string | yes | New session name |
+
+```json
+{"id": 4, "method": "rename_session", "params": {"name": "dev", "new_name": "prod"}}
+```
+
+**Result:**
+
+```json
+{"id": 4, "method": "rename_session", "result": {"name": "prod"}}
+```
+
+**Errors:** `session_not_found` if the session doesn't exist, `session_name_conflict` if the new name is already taken.
+
 #### `set_server_mode`
 
 Set the server's persistence mode.

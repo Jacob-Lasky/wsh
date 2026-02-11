@@ -37,6 +37,12 @@ tags:
     description: Documentation and spec endpoints
 
 paths:
+  # Note: In server mode, all per-session endpoints (input, screen, scrollback,
+  # ws/raw, ws/json, overlay, panel, quiesce, input/mode, input/capture,
+  # input/release) are also available under /sessions/{name}/ prefix.
+  # For example: /sessions/dev/input, /sessions/dev/screen, etc.
+  # The top-level paths below act on the "default" session in standalone mode.
+
   /health:
     get:
       operationId: getHealth
@@ -741,6 +747,130 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+
+  # --- Session-Scoped Endpoints ---
+  # These are identical to the top-level endpoints but scoped to a named session.
+
+  /sessions/{name}/input:
+    post:
+      operationId: postSessionInput
+      summary: Inject input into a named session's PTY
+      tags: [session, input]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Input accepted.
+        "404":
+          description: Session not found.
+
+  /sessions/{name}/screen:
+    get:
+      operationId: getSessionScreen
+      summary: Get the current screen of a named session
+      tags: [session, terminal]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            $ref: "#/components/schemas/Format"
+      responses:
+        "200":
+          description: Current screen state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScreenResponse"
+        "404":
+          description: Session not found.
+
+  /sessions/{name}/scrollback:
+    get:
+      operationId: getSessionScrollback
+      summary: Get scrollback buffer of a named session
+      tags: [session, terminal]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            $ref: "#/components/schemas/Format"
+        - name: offset
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Scrollback lines.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrollbackResponse"
+        "404":
+          description: Session not found.
+
+  /sessions/{name}/ws/json:
+    get:
+      operationId: sessionWsJson
+      summary: Per-session JSON WebSocket
+      tags: [session, websocket]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      description: >
+        WebSocket upgrade for per-session real-time events and method calls.
+        Same protocol as /ws/json but scoped to a single session.
+      responses:
+        "101":
+          description: WebSocket upgrade.
+        "404":
+          description: Session not found.
+
+  /sessions/{name}/ws/raw:
+    get:
+      operationId: sessionWsRaw
+      summary: Per-session raw binary WebSocket
+      tags: [session, websocket]
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      description: >
+        WebSocket upgrade for raw PTY I/O on a specific session.
+      responses:
+        "101":
+          description: WebSocket upgrade.
+        "404":
+          description: Session not found.
 
   # --- Server Management ---
 
