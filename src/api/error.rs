@@ -39,6 +39,10 @@ pub enum ApiError {
     InputSendFailed,
     /// 408 - Quiescence wait exceeded max_wait_ms deadline.
     QuiesceTimeout,
+    /// 500 - Failed to create a session (PTY spawn error, etc.).
+    SessionCreateFailed(String),
+    /// 409 - Session name already exists.
+    SessionNameConflict(String),
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -61,6 +65,8 @@ impl ApiError {
             ApiError::ParserUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::InputSendFailed => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::QuiesceTimeout => StatusCode::REQUEST_TIMEOUT,
+            ApiError::SessionCreateFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::SessionNameConflict(_) => StatusCode::CONFLICT,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -82,6 +88,8 @@ impl ApiError {
             ApiError::ParserUnavailable => "parser_unavailable",
             ApiError::InputSendFailed => "input_send_failed",
             ApiError::QuiesceTimeout => "quiesce_timeout",
+            ApiError::SessionCreateFailed(_) => "session_create_failed",
+            ApiError::SessionNameConflict(_) => "session_name_conflict",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -106,6 +114,12 @@ impl ApiError {
             ApiError::InputSendFailed => "Failed to send input to terminal.".to_string(),
             ApiError::QuiesceTimeout => {
                 "Terminal did not become quiescent within the deadline.".to_string()
+            }
+            ApiError::SessionCreateFailed(detail) => {
+                format!("Failed to create session: {}.", detail)
+            }
+            ApiError::SessionNameConflict(name) => {
+                format!("Session name already exists: {}.", name)
             }
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }
@@ -358,6 +372,50 @@ mod tests {
             response_parts(ApiError::InternalError("database timeout".into())).await;
         let msg = json["error"]["message"].as_str().unwrap();
         assert_eq!(msg, "Internal error: database timeout.");
+    }
+
+    #[tokio::test]
+    async fn session_create_failed_status() {
+        let (status, _) =
+            response_parts(ApiError::SessionCreateFailed("pty error".into())).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn session_create_failed_code() {
+        let (_, json) =
+            response_parts(ApiError::SessionCreateFailed("pty error".into())).await;
+        assert_eq!(json["error"]["code"], "session_create_failed");
+    }
+
+    #[tokio::test]
+    async fn session_create_failed_includes_detail() {
+        let (_, json) =
+            response_parts(ApiError::SessionCreateFailed("pty error".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Failed to create session: pty error.");
+    }
+
+    #[tokio::test]
+    async fn session_name_conflict_status() {
+        let (status, _) =
+            response_parts(ApiError::SessionNameConflict("taken".into())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn session_name_conflict_code() {
+        let (_, json) =
+            response_parts(ApiError::SessionNameConflict("taken".into())).await;
+        assert_eq!(json["error"]["code"], "session_name_conflict");
+    }
+
+    #[tokio::test]
+    async fn session_name_conflict_includes_name() {
+        let (_, json) =
+            response_parts(ApiError::SessionNameConflict("taken".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Session name already exists: taken.");
     }
 
     // ── JSON structure tests ───────────────────────────────────────

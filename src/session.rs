@@ -9,7 +9,7 @@ use crate::input::{InputBroadcaster, InputMode};
 use crate::overlay::OverlayStore;
 use crate::panel::PanelStore;
 use crate::parser::Parser;
-use crate::pty::Pty;
+use crate::pty::{Pty, PtyError, SpawnCommand};
 use crate::shutdown::ShutdownCoordinator;
 use crate::terminal::TerminalSize;
 
@@ -33,6 +33,106 @@ pub struct Session {
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
     pub activity: ActivityTracker,
+}
+
+impl Session {
+    /// Spawn a new session with a PTY and all associated I/O tasks.
+    ///
+    /// The PTY reader only publishes to the broker (no stdout -- server mode).
+    /// The PTY writer consumes from the input channel.
+    ///
+    /// Returns the session and a oneshot receiver that fires when the child
+    /// process exits. If the child handle is unavailable the receiver resolves
+    /// immediately.
+    pub fn spawn(
+        name: String,
+        command: SpawnCommand,
+        rows: u16,
+        cols: u16,
+    ) -> Result<(Self, tokio::sync::oneshot::Receiver<()>), PtyError> {
+        let mut pty = Pty::spawn(rows, cols, command)?;
+        let pty_reader = pty.take_reader()?;
+        let pty_writer = pty.take_writer()?;
+        let pty_child = pty.take_child();
+        let pty = Arc::new(pty);
+
+        // Monitor child exit via a oneshot channel.
+        let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
+        if let Some(mut child) = pty_child {
+            tokio::task::spawn_blocking(move || {
+                match child.wait() {
+                    Ok(status) => tracing::debug!(?status, "session child exited"),
+                    Err(e) => tracing::error!(?e, "error waiting for session child"),
+                }
+                let _ = child_exit_tx.send(());
+            });
+        } else {
+            // No child to wait on; signal immediately.
+            let _ = child_exit_tx.send(());
+        }
+
+        let broker = crate::broker::Broker::new();
+        let parser = Parser::spawn(&broker, cols as usize, rows as usize, 10_000);
+        let (input_tx, input_rx) = mpsc::channel::<Bytes>(64);
+        let shutdown = ShutdownCoordinator::new();
+        let overlays = OverlayStore::new();
+        let panels = PanelStore::new();
+        let input_mode = InputMode::new();
+        let input_broadcaster = InputBroadcaster::new();
+        let activity = ActivityTracker::new();
+        let terminal_size = TerminalSize::new(rows, cols);
+
+        // Spawn PTY reader (server mode -- no stdout, only broker)
+        let broker_clone = broker.clone();
+        let activity_clone = activity.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut reader = pty_reader;
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data = Bytes::copy_from_slice(&buf[..n]);
+                        broker_clone.publish(data);
+                        activity_clone.touch();
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Spawn PTY writer
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let mut writer = pty_writer;
+            let mut rx = input_rx;
+            while let Some(data) = rx.blocking_recv() {
+                if writer.write_all(&data).is_err() {
+                    break;
+                }
+                let _ = writer.flush();
+            }
+        });
+
+        Ok((
+            Session {
+                name,
+                input_tx,
+                output_rx: broker.sender(),
+                shutdown,
+                parser,
+                overlays,
+                panels,
+                pty,
+                terminal_size,
+                input_mode,
+                input_broadcaster,
+                activity,
+            },
+            child_exit_rx,
+        ))
+    }
 }
 
 /// Server-level session lifecycle events.

@@ -24,7 +24,8 @@ use crate::parser::{
     events::EventType,
     state::{Format, Query},
 };
-use crate::session::Session;
+use crate::pty::SpawnCommand;
+use crate::session::{RegistryError, Session};
 
 use super::error::ApiError;
 use super::{get_session, AppState};
@@ -958,4 +959,110 @@ pub(super) async fn docs_index() -> impl IntoResponse {
         [("content-type", "text/markdown; charset=utf-8")],
         DOCS_INDEX,
     )
+}
+
+// ── Session management types ─────────────────────────────────────
+
+#[derive(Deserialize)]
+pub(super) struct CreateSessionRequest {
+    pub name: Option<String>,
+    pub command: Option<String>,
+    pub rows: Option<u16>,
+    pub cols: Option<u16>,
+}
+
+#[derive(Serialize)]
+pub(super) struct SessionInfo {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RenameSessionRequest {
+    pub name: String,
+}
+
+// ── Session management handlers ──────────────────────────────────
+
+pub(super) async fn session_list(
+    State(state): State<AppState>,
+) -> Json<Vec<SessionInfo>> {
+    let names = state.sessions.list();
+    let infos = names.into_iter().map(|name| SessionInfo { name }).collect();
+    Json(infos)
+}
+
+pub(super) async fn session_create(
+    State(state): State<AppState>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<(StatusCode, Json<SessionInfo>), ApiError> {
+    let command = match req.command {
+        Some(cmd) => SpawnCommand::Command {
+            command: cmd,
+            interactive: false,
+        },
+        None => SpawnCommand::Shell {
+            interactive: false,
+            shell: None,
+        },
+    };
+
+    let rows = req.rows.unwrap_or(24);
+    let cols = req.cols.unwrap_or(80);
+
+    // Use a placeholder name for spawn; registry.insert will assign the real name.
+    let (session, _child_exit_rx) = Session::spawn("".to_string(), command, rows, cols)
+        .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
+
+    let assigned_name = state
+        .sessions
+        .insert(req.name, session)
+        .map_err(|e| match e {
+            RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
+            RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+        })?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(SessionInfo {
+            name: assigned_name,
+        }),
+    ))
+}
+
+pub(super) async fn session_get(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<SessionInfo>, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(Json(SessionInfo {
+        name: session.name,
+    }))
+}
+
+pub(super) async fn session_rename(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<RenameSessionRequest>,
+) -> Result<Json<SessionInfo>, ApiError> {
+    state.sessions.rename(&name, &req.name).map_err(|e| match e {
+        RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
+        RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+    })?;
+
+    Ok(Json(SessionInfo { name: req.name }))
+}
+
+pub(super) async fn session_kill(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .sessions
+        .remove(&name)
+        .ok_or_else(|| ApiError::SessionNotFound(name))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn server_persist() -> StatusCode {
+    StatusCode::NO_CONTENT
 }
