@@ -50,6 +50,14 @@ Content-Type: application/json
 {"id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}
 ```
 
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/overlay \
+  -H 'Content-Type: application/json' \
+  -d '{"x": 10, "y": 0, "z": 100, "spans": [{"text": "Status: ", "bold": true}, {"text": "OK", "fg": "green"}]}'
+```
+
 ## List Overlays
 
 ```
@@ -73,6 +81,12 @@ GET /overlay
 ]
 ```
 
+**Example:**
+
+```bash
+curl http://localhost:8080/overlay
+```
+
 ## Get a Single Overlay
 
 ```
@@ -82,6 +96,12 @@ GET /overlay/:id
 **Response:** `200 OK` with the overlay object.
 
 **Error:** `404` with code `overlay_not_found` if the ID doesn't exist.
+
+**Example:**
+
+```bash
+curl http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
+```
 
 ## Update Overlay Spans
 
@@ -106,6 +126,14 @@ Replaces the overlay's spans while keeping its position and z-order.
 **Response:** `204 No Content`
 
 **Error:** `404` with code `overlay_not_found` if the ID doesn't exist.
+
+**Example:**
+
+```bash
+curl -X PUT http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+  -H 'Content-Type: application/json' \
+  -d '{"spans": [{"text": "Status: ", "bold": true}, {"text": "Error", "fg": "red"}]}'
+```
 
 ## Move or Reorder an Overlay
 
@@ -137,6 +165,14 @@ optional -- only provided fields are updated.
 
 **Error:** `404` with code `overlay_not_found` if the ID doesn't exist.
 
+**Example:**
+
+```bash
+curl -X PATCH http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+  -H 'Content-Type: application/json' \
+  -d '{"x": 20, "y": 5, "z": 200}'
+```
+
 ## Delete an Overlay
 
 ```
@@ -147,6 +183,12 @@ DELETE /overlay/:id
 
 **Error:** `404` with code `overlay_not_found` if the ID doesn't exist.
 
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/overlay/f47ac10b-58cc-4372-a567-0e02b2c3d479
+```
+
 ## Clear All Overlays
 
 ```
@@ -156,6 +198,12 @@ DELETE /overlay
 Removes every overlay.
 
 **Response:** `204 No Content`
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/overlay
+```
 
 ## Overlay Spans
 

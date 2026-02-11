@@ -193,10 +193,14 @@ Get the current visible screen. Same response shape as `GET /screen`.
 
 **Params:** `format` (`"plain"` | `"styled"`, default `"styled"`)
 
+```json
+{"id": 1, "method": "get_screen", "params": {"format": "styled"}}
+```
+
 **Result:**
 
 ```json
-{"epoch": 42, "lines": [...], "cursor": {...}, "cols": 80, "rows": 24, "alternate_active": false, ...}
+{"id": 1, "method": "get_screen", "result": {"epoch": 42, "lines": [...], "cursor": {...}, "cols": 80, "rows": 24, "alternate_active": false, ...}}
 ```
 
 ### `get_scrollback`
@@ -205,10 +209,14 @@ Get scrollback buffer contents. Same response shape as `GET /scrollback`.
 
 **Params:** `format` (default `"styled"`), `offset` (default `0`), `limit` (default `100`)
 
+```json
+{"id": 2, "method": "get_scrollback", "params": {"format": "plain", "offset": 0, "limit": 50}}
+```
+
 **Result:**
 
 ```json
-{"epoch": 42, "lines": [...], "total_lines": 500, "offset": 0}
+{"id": 2, "method": "get_scrollback", "result": {"epoch": 42, "lines": [...], "total_lines": 500, "offset": 0}}
 ```
 
 ### `send_input`
@@ -222,11 +230,25 @@ Inject bytes into the terminal's PTY.
 | `data` | string | (required) | The data to send |
 | `encoding` | `"utf8"` \| `"base64"` | `"utf8"` | How `data` is encoded |
 
+```json
+{"id": 3, "method": "send_input", "params": {"data": "ls\n"}}
+```
+
+To send binary data (e.g., Ctrl+C):
+
+```json
+{"id": 4, "method": "send_input", "params": {"data": "Aw==", "encoding": "base64"}}
+```
+
 **Result:** `{}`
 
 ### `get_input_mode`
 
 Get the current input mode.
+
+```json
+{"id": 5, "method": "get_input_mode"}
+```
 
 **Result:** `{"mode": "passthrough"}` or `{"mode": "capture"}`
 
@@ -235,11 +257,19 @@ Get the current input mode.
 Switch to capture mode. Keyboard input is intercepted and broadcast as events
 instead of being sent to the PTY.
 
+```json
+{"id": 6, "method": "capture_input"}
+```
+
 **Result:** `{}`
 
 ### `release_input`
 
 Switch back to passthrough mode. Keyboard input goes to the PTY normally.
+
+```json
+{"id": 7, "method": "release_input"}
+```
 
 **Result:** `{}`
 
@@ -256,6 +286,10 @@ responsive while waiting — other events and method calls continue normally.
 | `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
 | `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for screen snapshot |
 | `max_wait_ms` | integer | (none) | Overall deadline; omit for no deadline |
+
+```json
+{"id": 8, "method": "await_quiesce", "params": {"timeout_ms": 2000, "format": "plain"}}
+```
 
 **Result:**
 
@@ -304,11 +338,19 @@ Create a positioned text overlay on the terminal.
 | `z` | integer | no | Z-order (stacking) |
 | `spans` | array | yes | Array of span objects (see overlay docs) |
 
+```json
+{"id": 10, "method": "create_overlay", "params": {"x": 60, "y": 0, "z": 100, "spans": [{"text": "Status: OK", "fg": "green"}]}}
+```
+
 **Result:** `{"id": "overlay-uuid"}`
 
 ### `list_overlays`
 
 List all active overlays.
+
+```json
+{"id": 11, "method": "list_overlays"}
+```
 
 **Result:** Array of overlay objects.
 
@@ -318,6 +360,10 @@ Get a single overlay by id.
 
 **Params:** `id` (string, required)
 
+```json
+{"id": 12, "method": "get_overlay", "params": {"id": "overlay-uuid"}}
+```
+
 **Result:** Overlay object.
 
 ### `update_overlay`
@@ -325,6 +371,10 @@ Get a single overlay by id.
 Replace an overlay's spans.
 
 **Params:** `id` (string, required), `spans` (array, required)
+
+```json
+{"id": 13, "method": "update_overlay", "params": {"id": "overlay-uuid", "spans": [{"text": "Updated", "bold": true}]}}
+```
 
 **Result:** `{}`
 
@@ -334,6 +384,10 @@ Move or reorder an overlay without replacing its content.
 
 **Params:** `id` (string, required), `x` (integer, optional), `y` (integer, optional), `z` (integer, optional)
 
+```json
+{"id": 14, "method": "patch_overlay", "params": {"id": "overlay-uuid", "x": 0, "y": 23}}
+```
+
 **Result:** `{}`
 
 ### `delete_overlay`
@@ -342,11 +396,19 @@ Delete an overlay.
 
 **Params:** `id` (string, required)
 
+```json
+{"id": 15, "method": "delete_overlay", "params": {"id": "overlay-uuid"}}
+```
+
 **Result:** `{}`
 
 ### `clear_overlays`
 
 Delete all overlays.
+
+```json
+{"id": 16, "method": "clear_overlays"}
+```
 
 **Result:** `{}`
 
@@ -363,11 +425,19 @@ Create a panel (agent-owned screen region that shrinks the PTY).
 | `z` | integer | no | Z-order (auto-assigned if omitted) |
 | `spans` | array | no | Array of span objects (default: empty) |
 
+```json
+{"id": 20, "method": "create_panel", "params": {"position": "bottom", "height": 1, "spans": [{"text": "Ready", "fg": "green"}]}}
+```
+
 **Result:** `{"id": "panel-uuid"}`
 
 ### `list_panels`
 
 List all active panels.
+
+```json
+{"id": 21, "method": "list_panels"}
+```
 
 **Result:** Array of panel objects.
 
@@ -377,6 +447,10 @@ Get a single panel by id.
 
 **Params:** `id` (string, required)
 
+```json
+{"id": 22, "method": "get_panel", "params": {"id": "panel-uuid"}}
+```
+
 **Result:** Panel object.
 
 ### `update_panel`
@@ -384,6 +458,10 @@ Get a single panel by id.
 Fully replace a panel's properties.
 
 **Params:** `id` (string, required), `position` (string, required), `height` (integer, required), `z` (integer, required), `spans` (array, required)
+
+```json
+{"id": 23, "method": "update_panel", "params": {"id": "panel-uuid", "position": "bottom", "height": 1, "z": 10, "spans": [{"text": "Updated"}]}}
+```
 
 **Result:** `{}`
 
@@ -393,6 +471,10 @@ Partially update a panel. Only provided fields are changed.
 
 **Params:** `id` (string, required), `position` (string, optional), `height` (integer, optional), `z` (integer, optional), `spans` (array, optional)
 
+```json
+{"id": 24, "method": "patch_panel", "params": {"id": "panel-uuid", "spans": [{"text": "Patched", "bold": true}]}}
+```
+
 **Result:** `{}`
 
 ### `delete_panel`
@@ -401,11 +483,19 @@ Delete a panel.
 
 **Params:** `id` (string, required)
 
+```json
+{"id": 25, "method": "delete_panel", "params": {"id": "panel-uuid"}}
+```
+
 **Result:** `{}`
 
 ### `clear_panels`
 
 Delete all panels.
+
+```json
+{"id": 26, "method": "clear_panels"}
+```
 
 **Result:** `{}`
 

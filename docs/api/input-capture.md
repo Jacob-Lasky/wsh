@@ -28,6 +28,12 @@ GET /input/mode
 {"mode": "passthrough"}
 ```
 
+**Example:**
+
+```bash
+curl http://localhost:8080/input/mode
+```
+
 ## Switching to Capture Mode
 
 ```
@@ -42,6 +48,12 @@ vim, etc.) sees no input until you release.
 
 This is idempotent -- calling it multiple times has no additional effect.
 
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/input/capture
+```
+
 ## Releasing Back to Passthrough
 
 ```
@@ -54,13 +66,19 @@ Restores normal input flow. The PTY receives keystrokes again.
 
 This is idempotent.
 
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/input/release
+```
+
 ## Subscribing to Input Events
 
 To receive input events, connect to the JSON WebSocket and include `"input"`
 in your subscription:
 
 ```json
-{"events": ["input"]}
+{"id": 1, "method": "subscribe", "params": {"events": ["input"]}}
 ```
 
 You will then receive events for every keystroke:

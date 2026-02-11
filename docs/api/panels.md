@@ -70,6 +70,14 @@ Content-Type: application/json
 {"id": "f47ac10b-58cc-4372-a567-0e02b2c3d479"}
 ```
 
+**Example:**
+
+```bash
+curl -X POST http://localhost:8080/panel \
+  -H 'Content-Type: application/json' \
+  -d '{"position": "top", "height": 2, "z": 100, "spans": [{"text": "Status: ", "bold": true}, {"text": "OK", "fg": "green"}]}'
+```
+
 ## List Panels
 
 ```
@@ -96,6 +104,12 @@ Returns all panels sorted by position then z-order descending.
 ]
 ```
 
+**Example:**
+
+```bash
+curl http://localhost:8080/panel
+```
+
 ## Get a Single Panel
 
 ```
@@ -105,6 +119,12 @@ GET /panel/:id
 **Response:** `200 OK` with the panel object.
 
 **Error:** `404` with code `panel_not_found` if the ID doesn't exist.
+
+**Example:**
+
+```bash
+curl http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
+```
 
 ## Replace a Panel
 
@@ -140,6 +160,14 @@ Fully replaces the panel's properties.
 
 **Error:** `404` with code `panel_not_found` if the ID doesn't exist.
 
+**Example:**
+
+```bash
+curl -X PUT http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+  -H 'Content-Type: application/json' \
+  -d '{"position": "top", "height": 2, "z": 100, "spans": [{"text": "Status: ", "bold": true}, {"text": "Error", "fg": "red"}]}'
+```
+
 ## Partially Update a Panel
 
 ```
@@ -172,6 +200,14 @@ optional -- only provided fields are updated.
 
 **Error:** `404` with code `panel_not_found` if the ID doesn't exist.
 
+**Example:**
+
+```bash
+curl -X PATCH http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
+  -H 'Content-Type: application/json' \
+  -d '{"height": 3, "spans": [{"text": "Line 1\nLine 2\nLine 3"}]}'
+```
+
 ## Delete a Panel
 
 ```
@@ -182,6 +218,12 @@ DELETE /panel/:id
 
 **Error:** `404` with code `panel_not_found` if the ID doesn't exist.
 
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/panel/f47ac10b-58cc-4372-a567-0e02b2c3d479
+```
+
 ## Clear All Panels
 
 ```
@@ -191,6 +233,12 @@ DELETE /panel
 Removes every panel. The PTY reclaims the full terminal height.
 
 **Response:** `204 No Content`
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:8080/panel
+```
 
 ## WebSocket Methods
 
@@ -206,6 +254,38 @@ the request/response protocol:
 | `patch_panel` | Partial update of a panel |
 | `delete_panel` | Delete a panel by ID |
 | `clear_panels` | Delete all panels |
+
+**Examples:**
+
+```json
+// Create a panel
+{"id": 1, "method": "create_panel", "params": {"position": "bottom", "height": 1, "spans": [{"text": "Ready"}]}}
+// -> {"id": 1, "method": "create_panel", "result": {"id": "panel-uuid"}}
+
+// List all panels
+{"id": 2, "method": "list_panels"}
+// -> {"id": 2, "method": "list_panels", "result": [{"id": "panel-uuid", ...}]}
+
+// Get a single panel
+{"id": 3, "method": "get_panel", "params": {"id": "panel-uuid"}}
+// -> {"id": 3, "method": "get_panel", "result": {"id": "panel-uuid", ...}}
+
+// Full replace
+{"id": 4, "method": "update_panel", "params": {"id": "panel-uuid", "position": "bottom", "height": 1, "z": 10, "spans": [{"text": "Updated"}]}}
+// -> {"id": 4, "method": "update_panel", "result": {}}
+
+// Partial update
+{"id": 5, "method": "patch_panel", "params": {"id": "panel-uuid", "spans": [{"text": "Patched"}]}}
+// -> {"id": 5, "method": "patch_panel", "result": {}}
+
+// Delete a panel
+{"id": 6, "method": "delete_panel", "params": {"id": "panel-uuid"}}
+// -> {"id": 6, "method": "delete_panel", "result": {}}
+
+// Delete all panels
+{"id": 7, "method": "clear_panels"}
+// -> {"id": 7, "method": "clear_panels", "result": {}}
+```
 
 ## Panel Spans
 
