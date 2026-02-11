@@ -13,6 +13,7 @@ use wsh::{
     input::{InputBroadcaster, InputMode},
     overlay::OverlayStore,
     parser::Parser,
+    session::{Session, SessionRegistry},
     shutdown::ShutdownCoordinator,
 };
 
@@ -20,7 +21,8 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
     let (input_tx, input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -32,6 +34,12 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     };
     (state, input_rx)
 }
@@ -72,7 +80,7 @@ async fn test_ws_method_get_input_mode() {
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();
@@ -100,7 +108,7 @@ async fn test_ws_method_get_screen() {
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();
@@ -125,7 +133,7 @@ async fn test_ws_method_send_input() {
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();
@@ -152,12 +160,34 @@ async fn test_ws_method_send_input() {
 
 #[tokio::test]
 async fn test_ws_subscribe_then_events() {
-    let (state, _rx) = create_test_state();
-    let broker_tx = state.output_rx.clone();
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let broker = Broker::new();
+    let broker_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let session = Session {
+        name: "test".to_string(),
+        input_tx,
+        output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
+        parser,
+        overlays: OverlayStore::new(),
+        input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
+    };
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();
@@ -209,7 +239,7 @@ async fn test_ws_unknown_method() {
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();
@@ -233,7 +263,7 @@ async fn test_ws_malformed_request() {
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();
@@ -252,12 +282,34 @@ async fn test_ws_malformed_request() {
 
 #[tokio::test]
 async fn test_ws_methods_interleaved_with_events() {
-    let (state, _rx) = create_test_state();
-    let broker_tx = state.output_rx.clone();
+    let (input_tx, _input_rx) = mpsc::channel(64);
+    let broker = Broker::new();
+    let broker_tx = broker.sender();
+    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let session = Session {
+        name: "test".to_string(),
+        input_tx,
+        output_rx: broker.sender(),
+        shutdown: ShutdownCoordinator::new(),
+        parser,
+        overlays: OverlayStore::new(),
+        input_mode: InputMode::new(),
+        input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
+    };
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
-    let (ws, _) = connect_async(format!("ws://{}/ws/json", addr))
+    let (ws, _) = connect_async(format!("ws://{}/sessions/test/ws/json", addr))
         .await
         .unwrap();
     let (mut tx, mut rx) = ws.split();

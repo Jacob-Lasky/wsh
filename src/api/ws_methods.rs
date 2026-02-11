@@ -237,7 +237,7 @@ pub struct PatchPanelParams {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-use super::AppState;
+use crate::session::Session;
 use super::handlers::flush_overlays_to_stdout;
 
 /// Parse params from a WsRequest, returning a WsResponse error on failure.
@@ -259,30 +259,30 @@ fn parse_params<T: serde::de::DeserializeOwned>(req: &WsRequest) -> Result<T, Ws
 }
 
 /// Dispatch a WebSocket request to the appropriate handler.
-pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
+pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
     let id = req.id.clone();
     let method = req.method.as_str();
 
     match method {
         "get_input_mode" => {
-            let mode = state.input_mode.get();
+            let mode = session.input_mode.get();
             WsResponse::success(id, method, serde_json::json!({ "mode": mode }))
         }
         "capture_input" => {
-            state.input_mode.capture();
+            session.input_mode.capture();
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "release_input" => {
-            state.input_mode.release();
+            session.input_mode.release();
             WsResponse::success(id, method, serde_json::json!({}))
         }
         "list_overlays" => {
-            let overlays = state.overlays.list();
+            let overlays = session.overlays.list();
             WsResponse::success(id, method, serde_json::to_value(&overlays).unwrap())
         }
         "clear_overlays" => {
-            let old = state.overlays.list();
-            state.overlays.clear();
+            let old = session.overlays.list();
+            session.overlays.clear();
             flush_overlays_to_stdout(&old, &[]);
             WsResponse::success(id, method, serde_json::json!({}))
         }
@@ -291,8 +291,8 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let overlay_id = state.overlays.create(params.x, params.y, params.z, params.spans);
-            let all = state.overlays.list();
+            let overlay_id = session.overlays.create(params.x, params.y, params.z, params.spans);
+            let all = session.overlays.list();
             flush_overlays_to_stdout(&[], &all);
             WsResponse::success(id, method, serde_json::json!({ "id": overlay_id }))
         }
@@ -301,7 +301,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match state.overlays.get(&params.id) {
+            match session.overlays.get(&params.id) {
                 Some(overlay) => WsResponse::success(
                     id,
                     method,
@@ -320,7 +320,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match state.overlays.get(&params.id) {
+            let old = match session.overlays.get(&params.id) {
                 Some(o) => o,
                 None => {
                     return WsResponse::error(
@@ -331,8 +331,8 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                     );
                 }
             };
-            if state.overlays.update(&params.id, params.spans) {
-                flush_overlays_to_stdout(&[old], &state.overlays.list());
+            if session.overlays.update(&params.id, params.spans) {
+                flush_overlays_to_stdout(&[old], &session.overlays.list());
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -348,7 +348,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match state.overlays.get(&params.id) {
+            let old = match session.overlays.get(&params.id) {
                 Some(o) => o,
                 None => {
                     return WsResponse::error(
@@ -359,8 +359,8 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                     );
                 }
             };
-            if state.overlays.move_to(&params.id, params.x, params.y, params.z) {
-                flush_overlays_to_stdout(&[old], &state.overlays.list());
+            if session.overlays.move_to(&params.id, params.x, params.y, params.z) {
+                flush_overlays_to_stdout(&[old], &session.overlays.list());
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -376,7 +376,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match state.overlays.get(&params.id) {
+            let old = match session.overlays.get(&params.id) {
                 Some(o) => o,
                 None => {
                     return WsResponse::error(
@@ -387,8 +387,8 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                     );
                 }
             };
-            if state.overlays.delete(&params.id) {
-                flush_overlays_to_stdout(&[old], &state.overlays.list());
+            if session.overlays.delete(&params.id) {
+                flush_overlays_to_stdout(&[old], &session.overlays.list());
                 WsResponse::success(id, method, serde_json::json!({}))
             } else {
                 WsResponse::error(
@@ -404,7 +404,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match state.parser.query(Query::Screen { format: params.format }).await {
+            match session.parser.query(Query::Screen { format: params.format }).await {
                 Ok(resp) => WsResponse::success(
                     id,
                     method,
@@ -423,7 +423,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match state
+            match session
                 .parser
                 .query(Query::Scrollback {
                     format: params.format,
@@ -467,9 +467,9 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                     }
                 }
             };
-            match state.input_tx.send(bytes).await {
+            match session.input_tx.send(bytes).await {
                 Ok(()) => {
-                    state.activity.touch();
+                    session.activity.touch();
                     WsResponse::success(id, method, serde_json::json!({}))
                 }
                 Err(_) => WsResponse::error(
@@ -481,16 +481,16 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
             }
         }
         "list_panels" => {
-            let panels = state.panels.list();
+            let panels = session.panels.list();
             WsResponse::success(id, method, serde_json::to_value(&panels).unwrap())
         }
         "clear_panels" => {
-            state.panels.clear();
+            session.panels.clear();
             crate::panel::reconfigure_layout(
-                &state.panels,
-                &state.terminal_size,
-                &state.pty,
-                &state.parser,
+                &session.panels,
+                &session.terminal_size,
+                &session.pty,
+                &session.parser,
             )
             .await;
             WsResponse::success(id, method, serde_json::json!({}))
@@ -500,14 +500,14 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let panel_id = state
+            let panel_id = session
                 .panels
                 .create(params.position, params.height, params.z, params.spans);
             crate::panel::reconfigure_layout(
-                &state.panels,
-                &state.terminal_size,
-                &state.pty,
-                &state.parser,
+                &session.panels,
+                &session.terminal_size,
+                &session.pty,
+                &session.parser,
             )
             .await;
             WsResponse::success(id, method, serde_json::json!({ "id": panel_id }))
@@ -517,7 +517,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match state.panels.get(&params.id) {
+            match session.panels.get(&params.id) {
                 Some(panel) => WsResponse::success(
                     id,
                     method,
@@ -536,7 +536,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match state.panels.get(&params.id) {
+            let old = match session.panels.get(&params.id) {
                 Some(p) => p,
                 None => {
                     return WsResponse::error(
@@ -547,7 +547,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                     );
                 }
             };
-            if !state.panels.patch(
+            if !session.panels.patch(
                 &params.id,
                 Some(params.position.clone()),
                 Some(params.height),
@@ -566,17 +566,17 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 || old.z != params.z;
             if needs_reconfigure {
                 crate::panel::reconfigure_layout(
-                    &state.panels,
-                    &state.terminal_size,
-                    &state.pty,
-                    &state.parser,
+                    &session.panels,
+                    &session.terminal_size,
+                    &session.pty,
+                    &session.parser,
                 )
                 .await;
             } else {
                 crate::panel::flush_panel_content(
-                    &state.panels,
+                    &session.panels,
                     &params.id,
-                    &state.terminal_size,
+                    &session.terminal_size,
                 );
             }
             WsResponse::success(id, method, serde_json::json!({}))
@@ -586,7 +586,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            let old = match state.panels.get(&params.id) {
+            let old = match session.panels.get(&params.id) {
                 Some(p) => p,
                 None => {
                     return WsResponse::error(
@@ -597,7 +597,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                     );
                 }
             };
-            if !state.panels.patch(
+            if !session.panels.patch(
                 &params.id,
                 params.position.clone(),
                 params.height,
@@ -616,17 +616,17 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 || params.z.is_some_and(|z| z != old.z);
             if needs_reconfigure {
                 crate::panel::reconfigure_layout(
-                    &state.panels,
-                    &state.terminal_size,
-                    &state.pty,
-                    &state.parser,
+                    &session.panels,
+                    &session.terminal_size,
+                    &session.pty,
+                    &session.parser,
                 )
                 .await;
             } else if params.spans.is_some() {
                 crate::panel::flush_panel_content(
-                    &state.panels,
+                    &session.panels,
                     &params.id,
-                    &state.terminal_size,
+                    &session.terminal_size,
                 );
             }
             WsResponse::success(id, method, serde_json::json!({}))
@@ -636,7 +636,7 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if !state.panels.delete(&params.id) {
+            if !session.panels.delete(&params.id) {
                 return WsResponse::error(
                     id,
                     method,
@@ -645,10 +645,10 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 );
             }
             crate::panel::reconfigure_layout(
-                &state.panels,
-                &state.terminal_size,
-                &state.pty,
-                &state.parser,
+                &session.panels,
+                &session.terminal_size,
+                &session.pty,
+                &session.parser,
             )
             .await;
             WsResponse::success(id, method, serde_json::json!({}))
@@ -771,20 +771,21 @@ mod tests {
     // Dispatch tests
     // -----------------------------------------------------------------------
 
-    use crate::api::AppState;
     use crate::broker::Broker;
     use crate::input::{InputBroadcaster, InputMode};
     use crate::overlay::OverlayStore;
     use crate::parser::Parser;
+    use crate::session::Session;
     use crate::shutdown::ShutdownCoordinator;
     use bytes::Bytes;
     use tokio::sync::mpsc;
 
-    fn create_test_state() -> (AppState, mpsc::Receiver<Bytes>) {
+    fn create_test_session() -> (Session, mpsc::Receiver<Bytes>) {
         let (input_tx, input_rx) = mpsc::channel(64);
         let broker = Broker::new();
         let parser = Parser::spawn(&broker, 80, 24, 1000);
-        let state = AppState {
+        let session = Session {
+            name: "test".to_string(),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
@@ -797,18 +798,18 @@ mod tests {
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             activity: crate::activity::ActivityTracker::new(),
         };
-        (state, input_rx)
+        (session, input_rx)
     }
 
     #[tokio::test]
     async fn dispatch_unknown_method() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "do_magic".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "unknown_method");
         assert_eq!(json["method"], "do_magic");
@@ -816,13 +817,13 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_input_mode() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: Some(serde_json::Value::Number(1.into())),
             method: "get_input_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["id"], 1);
         assert_eq!(json["method"], "get_input_mode");
@@ -831,7 +832,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_capture_and_release() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
 
         // Capture
         let req = WsRequest {
@@ -839,7 +840,7 @@ mod tests {
             method: "capture_input".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Verify mode changed
@@ -848,7 +849,7 @@ mod tests {
             method: "get_input_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "capture");
 
@@ -858,7 +859,7 @@ mod tests {
             method: "release_input".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Verify
@@ -867,49 +868,49 @@ mod tests {
             method: "get_input_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "passthrough");
     }
 
     #[tokio::test]
     async fn dispatch_list_overlays_empty() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "list_overlays".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"], serde_json::json!([]));
     }
 
     #[tokio::test]
     async fn dispatch_clear_overlays() {
-        let (state, _rx) = create_test_state();
-        state.overlays.create(0, 0, None, vec![]);
-        assert_eq!(state.overlays.list().len(), 1);
+        let (session, _rx) = create_test_session();
+        session.overlays.create(0, 0, None, vec![]);
+        assert_eq!(session.overlays.list().len(), 1);
 
         let req = WsRequest {
             id: None,
             method: "clear_overlays".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
-        assert_eq!(state.overlays.list().len(), 0);
+        assert_eq!(session.overlays.list().len(), 0);
     }
 
     #[tokio::test]
     async fn dispatch_get_screen() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: Some(serde_json::Value::Number(1.into())),
             method: "get_screen".to_string(),
             params: Some(serde_json::json!({"format": "plain"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["cols"].is_number());
         assert!(json["result"]["rows"].is_number());
@@ -918,26 +919,26 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_screen_no_params() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["cols"].is_number());
     }
 
     #[tokio::test]
     async fn dispatch_get_scrollback() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_scrollback".to_string(),
             params: Some(serde_json::json!({"format": "plain", "offset": 0, "limit": 10})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["total_lines"].is_number());
         assert!(json["result"]["lines"].is_array());
@@ -945,13 +946,13 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_send_input_utf8() {
-        let (state, mut rx) = create_test_state();
+        let (session, mut rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "send_input".to_string(),
             params: Some(serde_json::json!({"data": "hello"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
 
@@ -961,7 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_send_input_base64() {
-        let (state, mut rx) = create_test_state();
+        let (session, mut rx) = create_test_session();
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x03");
         let req = WsRequest {
@@ -969,7 +970,7 @@ mod tests {
             method: "send_input".to_string(),
             params: Some(serde_json::json!({"data": encoded, "encoding": "base64"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
 
@@ -979,20 +980,20 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_send_input_bad_base64() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "send_input".to_string(),
             params: Some(serde_json::json!({"data": "!!!not-base64!!!", "encoding": "base64"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "invalid_request");
     }
 
     #[tokio::test]
     async fn dispatch_create_overlay() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "create_overlay".to_string(),
@@ -1001,16 +1002,16 @@ mod tests {
                 "spans": [{"text": "Hello"}]
             })),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["id"].is_string());
-        assert_eq!(state.overlays.list().len(), 1);
+        assert_eq!(session.overlays.list().len(), 1);
     }
 
     #[tokio::test]
     async fn dispatch_get_overlay() {
-        let (state, _rx) = create_test_state();
-        let id = state.overlays.create(5, 10, None, vec![crate::overlay::OverlaySpan {
+        let (session, _rx) = create_test_session();
+        let id = session.overlays.create(5, 10, None, vec![crate::overlay::OverlaySpan {
             text: "Test".to_string(),
             fg: None, bg: None, bold: false, italic: false, underline: false,
         }]);
@@ -1019,7 +1020,7 @@ mod tests {
             method: "get_overlay".to_string(),
             params: Some(serde_json::json!({"id": id})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["x"], 5);
         assert_eq!(json["result"]["y"], 10);
@@ -1027,21 +1028,21 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_overlay_not_found() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_overlay".to_string(),
             params: Some(serde_json::json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
 
     #[tokio::test]
     async fn dispatch_update_overlay() {
-        let (state, _rx) = create_test_state();
-        let id = state.overlays.create(0, 0, None, vec![crate::overlay::OverlaySpan {
+        let (session, _rx) = create_test_session();
+        let id = session.overlays.create(0, 0, None, vec![crate::overlay::OverlaySpan {
             text: "Old".to_string(),
             fg: None, bg: None, bold: false, italic: false, underline: false,
         }]);
@@ -1050,54 +1051,54 @@ mod tests {
             method: "update_overlay".to_string(),
             params: Some(serde_json::json!({"id": id, "spans": [{"text": "New"}]})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        let overlay = state.overlays.get(&id).unwrap();
+        let overlay = session.overlays.get(&id).unwrap();
         assert_eq!(overlay.spans[0].text, "New");
     }
 
     #[tokio::test]
     async fn dispatch_patch_overlay() {
-        let (state, _rx) = create_test_state();
-        let id = state.overlays.create(0, 0, None, vec![]);
+        let (session, _rx) = create_test_session();
+        let id = session.overlays.create(0, 0, None, vec![]);
         let req = WsRequest {
             id: None,
             method: "patch_overlay".to_string(),
             params: Some(serde_json::json!({"id": id, "x": 20, "y": 30})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        let overlay = state.overlays.get(&id).unwrap();
+        let overlay = session.overlays.get(&id).unwrap();
         assert_eq!(overlay.x, 20);
         assert_eq!(overlay.y, 30);
     }
 
     #[tokio::test]
     async fn dispatch_delete_overlay() {
-        let (state, _rx) = create_test_state();
-        let id = state.overlays.create(0, 0, None, vec![]);
+        let (session, _rx) = create_test_session();
+        let id = session.overlays.create(0, 0, None, vec![]);
         let req = WsRequest {
             id: None,
             method: "delete_overlay".to_string(),
             params: Some(serde_json::json!({"id": id})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        assert!(state.overlays.get(&id).is_none());
+        assert!(session.overlays.get(&id).is_none());
     }
 
     #[tokio::test]
     async fn dispatch_delete_overlay_not_found() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "delete_overlay".to_string(),
             params: Some(serde_json::json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
@@ -1108,20 +1109,20 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_list_panels_empty() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "list_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"], serde_json::json!([]));
     }
 
     #[tokio::test]
     async fn dispatch_create_panel() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: Some(json!(1)),
             method: "create_panel".to_string(),
@@ -1131,17 +1132,17 @@ mod tests {
                 "spans": [{"text": "Status"}]
             })),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["id"].is_string());
         assert_eq!(json["id"], 1);
-        assert_eq!(state.panels.list().len(), 1);
+        assert_eq!(session.panels.list().len(), 1);
     }
 
     #[tokio::test]
     async fn dispatch_get_panel() {
-        let (state, _rx) = create_test_state();
-        let panel_id = state.panels.create(
+        let (session, _rx) = create_test_session();
+        let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
             None,
@@ -1155,7 +1156,7 @@ mod tests {
             method: "get_panel".to_string(),
             params: Some(json!({"id": panel_id})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["position"], "top");
         assert_eq!(json["result"]["height"], 1);
@@ -1164,27 +1165,27 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_panel_not_found() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_panel".to_string(),
             params: Some(json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
 
     #[tokio::test]
     async fn dispatch_update_panel() {
-        let (state, _rx) = create_test_state();
-        let panel_id = state.panels.create(
+        let (session, _rx) = create_test_session();
+        let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
             None,
             vec![],
         );
-        let panel = state.panels.get(&panel_id).unwrap();
+        let panel = session.panels.get(&panel_id).unwrap();
         let req = WsRequest {
             id: None,
             method: "update_panel".to_string(),
@@ -1196,10 +1197,10 @@ mod tests {
                 "spans": [{"text": "Updated"}]
             })),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        let updated = state.panels.get(&panel_id).unwrap();
+        let updated = session.panels.get(&panel_id).unwrap();
         assert_eq!(updated.position, crate::panel::Position::Bottom);
         assert_eq!(updated.height, 3);
         assert_eq!(updated.spans[0].text, "Updated");
@@ -1207,7 +1208,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_panel_not_found() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "update_panel".to_string(),
@@ -1219,15 +1220,15 @@ mod tests {
                 "spans": []
             })),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
 
     #[tokio::test]
     async fn dispatch_patch_panel() {
-        let (state, _rx) = create_test_state();
-        let panel_id = state.panels.create(
+        let (session, _rx) = create_test_session();
+        let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
             None,
@@ -1241,83 +1242,83 @@ mod tests {
                 "height": 5
             })),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        let patched = state.panels.get(&panel_id).unwrap();
+        let patched = session.panels.get(&panel_id).unwrap();
         assert_eq!(patched.height, 5);
         assert_eq!(patched.position, crate::panel::Position::Top);
     }
 
     #[tokio::test]
     async fn dispatch_patch_panel_not_found() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "patch_panel".to_string(),
             params: Some(json!({"id": "nonexistent", "height": 2})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
 
     #[tokio::test]
     async fn dispatch_delete_panel() {
-        let (state, _rx) = create_test_state();
-        let panel_id = state.panels.create(
+        let (session, _rx) = create_test_session();
+        let panel_id = session.panels.create(
             crate::panel::Position::Bottom,
             2,
             None,
             vec![],
         );
-        assert_eq!(state.panels.list().len(), 1);
+        assert_eq!(session.panels.list().len(), 1);
         let req = WsRequest {
             id: None,
             method: "delete_panel".to_string(),
             params: Some(json!({"id": panel_id})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        assert!(state.panels.get(&panel_id).is_none());
+        assert!(session.panels.get(&panel_id).is_none());
     }
 
     #[tokio::test]
     async fn dispatch_delete_panel_not_found() {
-        let (state, _rx) = create_test_state();
+        let (session, _rx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "delete_panel".to_string(),
             params: Some(json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
 
     #[tokio::test]
     async fn dispatch_clear_panels() {
-        let (state, _rx) = create_test_state();
-        state.panels.create(crate::panel::Position::Top, 1, None, vec![]);
-        state.panels.create(crate::panel::Position::Bottom, 1, None, vec![]);
-        assert_eq!(state.panels.list().len(), 2);
+        let (session, _rx) = create_test_session();
+        session.panels.create(crate::panel::Position::Top, 1, None, vec![]);
+        session.panels.create(crate::panel::Position::Bottom, 1, None, vec![]);
+        assert_eq!(session.panels.list().len(), 2);
 
         let req = WsRequest {
             id: None,
             method: "clear_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
-        assert_eq!(state.panels.list().len(), 0);
+        assert_eq!(session.panels.list().len(), 0);
     }
 
     #[tokio::test]
     async fn dispatch_list_panels_after_create() {
-        let (state, _rx) = create_test_state();
-        state.panels.create(
+        let (session, _rx) = create_test_session();
+        session.panels.create(
             crate::panel::Position::Top,
             1,
             None,
@@ -1331,7 +1332,7 @@ mod tests {
             method: "list_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &state).await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let panels = json["result"].as_array().unwrap();
         assert_eq!(panels.len(), 1);

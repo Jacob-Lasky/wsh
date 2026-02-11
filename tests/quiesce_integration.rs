@@ -19,6 +19,7 @@ use wsh::{
     input::{InputBroadcaster, InputMode},
     overlay::OverlayStore,
     parser::Parser,
+    session::{Session, SessionRegistry},
     shutdown::ShutdownCoordinator,
 };
 
@@ -27,7 +28,8 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
     let activity = ActivityTracker::new();
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -42,6 +44,12 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
         activity: activity.clone(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     };
     (state, input_rx, activity)
 }
@@ -95,7 +103,7 @@ async fn test_http_quiesce_returns_screen_state_after_quiet() {
     let addr = start_server(app).await;
 
     // Terminal should already be quiet (no activity for >100ms given setup time)
-    let (status, json) = http_get(addr, "/quiesce?timeout_ms=100&format=plain").await;
+    let (status, json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
 
     assert_eq!(status, 200);
     assert!(json.get("screen").is_some(), "response should have screen field");
@@ -126,7 +134,7 @@ async fn test_http_quiesce_returns_408_when_deadline_exceeded() {
     });
 
     let (status, json) =
-        http_get(addr, "/quiesce?timeout_ms=500&max_wait_ms=200&format=plain").await;
+        http_get(addr, "/sessions/test/quiesce?timeout_ms=500&max_wait_ms=200&format=plain").await;
 
     touch_handle.abort();
 
@@ -144,7 +152,7 @@ async fn test_http_quiesce_returns_immediately_when_already_quiescent() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let start = std::time::Instant::now();
-    let (status, _json) = http_get(addr, "/quiesce?timeout_ms=100&format=plain").await;
+    let (status, _json) = http_get(addr, "/sessions/test/quiesce?timeout_ms=100&format=plain").await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
@@ -177,7 +185,7 @@ async fn test_http_quiesce_waits_for_activity_to_stop() {
 
     let start = std::time::Instant::now();
     let (status, _json) =
-        http_get(addr, "/quiesce?timeout_ms=150&max_wait_ms=5000&format=plain").await;
+        http_get(addr, "/sessions/test/quiesce?timeout_ms=150&max_wait_ms=5000&format=plain").await;
     let elapsed = start.elapsed();
 
     assert_eq!(status, 200);
@@ -207,7 +215,7 @@ async fn test_http_input_resets_quiescence_timer() {
     let quiesce_task = tokio::spawn(async move {
         let start = std::time::Instant::now();
         let (status, _json) =
-            http_get(addr_clone, "/quiesce?timeout_ms=200&max_wait_ms=5000&format=plain").await;
+            http_get(addr_clone, "/sessions/test/quiesce?timeout_ms=200&max_wait_ms=5000&format=plain").await;
         (status, start.elapsed())
     });
 
@@ -223,7 +231,7 @@ async fn test_http_input_resets_quiescence_timer() {
     });
     let req = hyper::Request::builder()
         .method("POST")
-        .uri("/input")
+        .uri("/sessions/test/input")
         .body(http_body_util::Full::new(Bytes::from("x")))
         .unwrap();
     let resp = sender.send_request(req).await.expect("request");
@@ -254,7 +262,7 @@ async fn test_ws_await_quiesce_returns_sync_result() {
 
     // Connect WebSocket
     let (mut ws, _resp) =
-        tokio_tungstenite::connect_async(format!("ws://{}/ws/json", addr))
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
             .await
             .expect("WS connect");
 
@@ -301,7 +309,7 @@ async fn test_ws_await_quiesce_timeout_error() {
     });
 
     let (mut ws, _resp) =
-        tokio_tungstenite::connect_async(format!("ws://{}/ws/json", addr))
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
             .await
             .expect("WS connect");
 
@@ -341,7 +349,7 @@ async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
     let addr = start_server(app).await;
 
     let (mut ws, _resp) =
-        tokio_tungstenite::connect_async(format!("ws://{}/ws/json", addr))
+        tokio_tungstenite::connect_async(format!("ws://{}/sessions/test/ws/json", addr))
             .await
             .expect("WS connect");
 

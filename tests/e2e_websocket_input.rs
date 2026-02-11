@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
+use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator};
 
 async fn start_server(app: axum::Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -68,7 +68,8 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
     });
 
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -81,13 +82,19 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
+    };
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Connect WebSocket
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
     let (mut ws_stream, _response) = connect_async(&ws_url)
         .await
         .expect("Failed to connect WebSocket");
@@ -194,7 +201,8 @@ async fn test_websocket_text_input_reaches_pty() {
     });
 
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -207,12 +215,18 @@ async fn test_websocket_text_input_reaches_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
+    };
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("WebSocket connect failed");
 
     tokio::time::sleep(Duration::from_millis(100)).await;

@@ -19,6 +19,7 @@ use wsh::broker::Broker;
 use wsh::input::{InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
+use wsh::session::{Session, SessionRegistry};
 use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test state for integration tests.
@@ -26,7 +27,8 @@ fn create_test_state() -> AppState {
     let (input_tx, _) = mpsc::channel::<Bytes>(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -38,6 +40,12 @@ fn create_test_state() -> AppState {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     }
 }
 
@@ -51,7 +59,7 @@ async fn test_input_capture_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/input/mode")
+                .uri("/sessions/test/input/mode")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -72,7 +80,7 @@ async fn test_input_capture_flow() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/input/capture")
+                .uri("/sessions/test/input/capture")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -86,7 +94,7 @@ async fn test_input_capture_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/input/mode")
+                .uri("/sessions/test/input/mode")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -107,7 +115,7 @@ async fn test_input_capture_flow() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/input/release")
+                .uri("/sessions/test/input/release")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -120,7 +128,7 @@ async fn test_input_capture_flow() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/input/mode")
+                .uri("/sessions/test/input/mode")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -148,7 +156,7 @@ async fn test_input_capture_idempotent() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input/capture")
+                    .uri("/sessions/test/input/capture")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -163,7 +171,7 @@ async fn test_input_capture_idempotent() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/input/mode")
+                .uri("/sessions/test/input/mode")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -183,7 +191,7 @@ async fn test_input_capture_idempotent() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input/release")
+                    .uri("/sessions/test/input/release")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -197,7 +205,7 @@ async fn test_input_capture_idempotent() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/input/mode")
+                .uri("/sessions/test/input/mode")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -222,7 +230,7 @@ async fn test_input_mode_wrong_method() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/input/mode")
+                .uri("/sessions/test/input/mode")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -237,7 +245,7 @@ async fn test_input_mode_wrong_method() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/input/capture")
+                .uri("/sessions/test/input/capture")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -251,7 +259,7 @@ async fn test_input_mode_wrong_method() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/input/release")
+                .uri("/sessions/test/input/release")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -273,7 +281,7 @@ async fn test_input_mode_state_shared_across_requests() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/input/capture")
+                .uri("/sessions/test/input/capture")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -286,7 +294,7 @@ async fn test_input_mode_state_shared_across_requests() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/input/mode")
+                    .uri("/sessions/test/input/mode")
                     .body(Body::empty())
                     .unwrap(),
             )

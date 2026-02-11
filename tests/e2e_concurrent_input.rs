@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
+use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator};
 
 async fn start_server(app: axum::Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -66,7 +66,8 @@ async fn test_concurrent_input_from_multiple_sources() {
     });
 
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -79,6 +80,12 @@ async fn test_concurrent_input_from_multiple_sources() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
+    };
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -90,7 +97,7 @@ async fn test_concurrent_input_from_multiple_sources() {
     let stdin_tx = input_tx.clone();
 
     // WebSocket connection
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
     let (mut ws_stream, _) = connect_async(&ws_url).await.expect("WS connect failed");
 
     // Markers for each input source
@@ -117,7 +124,7 @@ async fn test_concurrent_input_from_multiple_sources() {
             tokio::spawn(async move { let _ = conn.await; });
             let request = hyper::Request::builder()
                 .method("POST")
-                .uri("/input")
+                .uri("/sessions/test/input")
                 .body(http_body_util::Full::new(Bytes::from(cmd)))
                 .expect("build request");
             sender.send_request(request).await.expect("send request");
@@ -213,7 +220,8 @@ async fn test_rapid_http_requests() {
     });
 
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -225,6 +233,12 @@ async fn test_rapid_http_requests() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -244,7 +258,7 @@ async fn test_rapid_http_requests() {
         tokio::spawn(async move { let _ = conn.await; });
         let request = hyper::Request::builder()
             .method("POST")
-            .uri("/input")
+            .uri("/sessions/test/input")
             .body(http_body_util::Full::new(Bytes::from(cmd)))
             .expect("request");
         let response = sender.send_request(request).await.expect("send");

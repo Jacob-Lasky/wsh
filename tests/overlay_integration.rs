@@ -19,6 +19,7 @@ use wsh::broker::Broker;
 use wsh::input::{InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
+use wsh::session::{Session, SessionRegistry};
 use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test state for integration tests.
@@ -26,7 +27,8 @@ fn create_test_state() -> AppState {
     let (input_tx, _) = mpsc::channel::<Bytes>(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -38,6 +40,12 @@ fn create_test_state() -> AppState {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     }
 }
 
@@ -64,7 +72,7 @@ async fn test_overlay_crud_flow() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&create_body).unwrap()))
                 .unwrap(),
@@ -86,7 +94,7 @@ async fn test_overlay_crud_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -122,7 +130,7 @@ async fn test_overlay_crud_flow() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&update_body).unwrap()))
                 .unwrap(),
@@ -137,7 +145,7 @@ async fn test_overlay_crud_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -163,7 +171,7 @@ async fn test_overlay_crud_flow() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -176,7 +184,7 @@ async fn test_overlay_crud_flow() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -203,7 +211,7 @@ async fn test_overlay_list_and_clear() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&create_body1).unwrap()))
                 .unwrap(),
@@ -223,7 +231,7 @@ async fn test_overlay_list_and_clear() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&create_body2).unwrap()))
                 .unwrap(),
@@ -237,7 +245,7 @@ async fn test_overlay_list_and_clear() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -258,7 +266,7 @@ async fn test_overlay_list_and_clear() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -271,7 +279,7 @@ async fn test_overlay_list_and_clear() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -305,7 +313,7 @@ async fn test_overlay_patch_position() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/overlay")
+                .uri("/sessions/test/overlay")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&create_body).unwrap()))
                 .unwrap(),
@@ -331,7 +339,7 @@ async fn test_overlay_patch_position() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
                 .unwrap(),
@@ -345,7 +353,7 @@ async fn test_overlay_patch_position() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("/overlay/{}", overlay_id))
+                .uri(format!("/sessions/test/overlay/{}", overlay_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -373,7 +381,7 @@ async fn test_overlay_not_found() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/overlay/nonexistent-id")
+                .uri("/sessions/test/overlay/nonexistent-id")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -392,7 +400,7 @@ async fn test_overlay_not_found() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri("/overlay/nonexistent-id")
+                .uri("/sessions/test/overlay/nonexistent-id")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&update_body).unwrap()))
                 .unwrap(),
@@ -407,7 +415,7 @@ async fn test_overlay_not_found() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/overlay/nonexistent-id")
+                .uri("/sessions/test/overlay/nonexistent-id")
                 .body(Body::empty())
                 .unwrap(),
         )

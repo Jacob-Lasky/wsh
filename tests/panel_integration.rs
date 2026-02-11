@@ -15,6 +15,7 @@ use wsh::broker::Broker;
 use wsh::input::{InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
+use wsh::session::{Session, SessionRegistry};
 use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test state with a specified terminal size.
@@ -22,7 +23,8 @@ fn create_test_state_with_size(rows: u16, cols: u16) -> AppState {
     let (input_tx, _) = mpsc::channel::<Bytes>(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, cols as usize, rows as usize, 1000);
-    AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -37,6 +39,12 @@ fn create_test_state_with_size(rows: u16, cols: u16) -> AppState {
         ),
         terminal_size: wsh::terminal::TerminalSize::new(rows, cols),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     }
 }
 
@@ -71,7 +79,7 @@ async fn test_panel_crud_flow() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&create_body).unwrap()))
                 .unwrap(),
@@ -89,7 +97,7 @@ async fn test_panel_crud_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -116,7 +124,7 @@ async fn test_panel_crud_flow() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
                 .unwrap(),
@@ -131,7 +139,7 @@ async fn test_panel_crud_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -149,7 +157,7 @@ async fn test_panel_crud_flow() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -162,7 +170,7 @@ async fn test_panel_crud_flow() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -190,7 +198,7 @@ async fn test_panel_list_and_clear() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/panel")
+                    .uri("/sessions/test/panel")
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
                     .unwrap(),
@@ -205,7 +213,7 @@ async fn test_panel_list_and_clear() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -223,7 +231,7 @@ async fn test_panel_list_and_clear() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -236,7 +244,7 @@ async fn test_panel_list_and_clear() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -264,7 +272,7 @@ async fn test_panel_put_replaces_all_fields() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap(),
@@ -280,7 +288,7 @@ async fn test_panel_put_replaces_all_fields() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -302,7 +310,7 @@ async fn test_panel_put_replaces_all_fields() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&put_body).unwrap()))
                 .unwrap(),
@@ -316,7 +324,7 @@ async fn test_panel_put_replaces_all_fields() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", panel_id))
+                .uri(format!("/sessions/test/panel/{}", panel_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -339,7 +347,7 @@ async fn test_panel_not_found() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/panel/nonexistent-id")
+                .uri("/sessions/test/panel/nonexistent-id")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -355,7 +363,7 @@ async fn test_panel_not_found() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/panel/nonexistent-id")
+                .uri("/sessions/test/panel/nonexistent-id")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -369,7 +377,7 @@ async fn test_panel_not_found() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri("/panel/nonexistent-id")
+                .uri("/sessions/test/panel/nonexistent-id")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&patch_body).unwrap()))
                 .unwrap(),
@@ -397,7 +405,7 @@ async fn test_panel_visibility_when_space_exhausted() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap(),
@@ -420,7 +428,7 @@ async fn test_panel_visibility_when_space_exhausted() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap(),
@@ -436,7 +444,7 @@ async fn test_panel_visibility_when_space_exhausted() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", large_id))
+                .uri(format!("/sessions/test/panel/{}", large_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -449,7 +457,7 @@ async fn test_panel_visibility_when_space_exhausted() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", small_id))
+                .uri(format!("/sessions/test/panel/{}", small_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -464,7 +472,7 @@ async fn test_panel_visibility_when_space_exhausted() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/panel/{}", large_id))
+                .uri(format!("/sessions/test/panel/{}", large_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -475,7 +483,7 @@ async fn test_panel_visibility_when_space_exhausted() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(format!("/panel/{}", small_id))
+                .uri(format!("/sessions/test/panel/{}", small_id))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -501,7 +509,7 @@ async fn test_multiple_panels_cumulative_height() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap(),
@@ -520,7 +528,7 @@ async fn test_multiple_panels_cumulative_height() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_string(&body).unwrap()))
                 .unwrap(),
@@ -533,7 +541,7 @@ async fn test_multiple_panels_cumulative_height() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/panel")
+                .uri("/sessions/test/panel")
                 .body(Body::empty())
                 .unwrap(),
         )

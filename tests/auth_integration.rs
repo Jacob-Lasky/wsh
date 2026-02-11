@@ -19,6 +19,7 @@ use wsh::broker::Broker;
 use wsh::input::{InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
+use wsh::session::{Session, SessionRegistry};
 use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test state for integration tests.
@@ -26,7 +27,8 @@ fn create_test_state() -> AppState {
     let (input_tx, _) = mpsc::channel::<Bytes>(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -38,6 +40,12 @@ fn create_test_state() -> AppState {
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     }
 }
 
@@ -49,7 +57,7 @@ async fn test_auth_required_on_protected_routes() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/screen")
+                .uri("/sessions/test/screen")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -91,7 +99,7 @@ async fn test_bearer_token_grants_access() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/screen")
+                .uri("/sessions/test/screen")
                 .header("authorization", "Bearer test-token")
                 .body(Body::empty())
                 .unwrap(),
@@ -110,7 +118,7 @@ async fn test_query_param_token_grants_access() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/screen?token=test-token")
+                .uri("/sessions/test/screen?token=test-token")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -128,7 +136,7 @@ async fn test_wrong_token_returns_403() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/screen")
+                .uri("/sessions/test/screen")
                 .header("authorization", "Bearer wrong-token")
                 .body(Body::empty())
                 .unwrap(),
@@ -153,7 +161,7 @@ async fn test_no_auth_when_token_is_none() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/screen")
+                .uri("/sessions/test/screen")
                 .body(Body::empty())
                 .unwrap(),
         )

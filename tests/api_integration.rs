@@ -23,6 +23,7 @@ use wsh::broker::Broker;
 use wsh::input::{InputBroadcaster, InputMode};
 use wsh::overlay::OverlayStore;
 use wsh::parser::Parser;
+use wsh::session::{Session, SessionRegistry};
 use wsh::shutdown::ShutdownCoordinator;
 
 /// Creates a test application with channels for input/output.
@@ -31,7 +32,8 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
     let (input_tx, input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -43,6 +45,12 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     };
     (router(state, None), input_rx, broker.sender())
 }
@@ -90,7 +98,7 @@ async fn test_api_input_to_pty() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/input")
+                .uri("/sessions/test/input")
                 .body(Body::from(test_input.to_vec()))
                 .unwrap(),
         )
@@ -114,7 +122,8 @@ async fn test_api_input_multiple_requests() {
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -127,6 +136,9 @@ async fn test_api_input_multiple_requests() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let inputs = vec!["first input", "second input", "third input"];
@@ -138,7 +150,7 @@ async fn test_api_input_multiple_requests() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input")
+                    .uri("/sessions/test/input")
                     .body(Body::from(*input))
                     .unwrap(),
             )
@@ -175,7 +187,7 @@ async fn test_websocket_upgrade_response() {
 
     // A regular GET without upgrade headers should not return 404
     let response = app
-        .oneshot(Request::builder().uri("/ws/raw").body(Body::empty()).unwrap())
+        .oneshot(Request::builder().uri("/sessions/test/ws/raw").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -194,7 +206,8 @@ async fn test_websocket_receives_pty_output() {
     let broker = Broker::new();
     let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -207,10 +220,13 @@ async fn test_websocket_receives_pty_output() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
 
     // Connect WebSocket client
     let (mut ws_stream, _response) = connect_async(&ws_url)
@@ -246,7 +262,8 @@ async fn test_websocket_sends_input_to_pty() {
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -259,10 +276,13 @@ async fn test_websocket_sends_input_to_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
 
     // Connect WebSocket client
     let (mut ws_stream, _response) = connect_async(&ws_url)
@@ -294,7 +314,8 @@ async fn test_websocket_text_input_to_pty() {
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -307,10 +328,13 @@ async fn test_websocket_text_input_to_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
 
     let (mut ws_stream, _response) = connect_async(&ws_url)
         .await
@@ -341,7 +365,8 @@ async fn test_websocket_bidirectional_communication() {
     let broker = Broker::new();
     let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -354,10 +379,13 @@ async fn test_websocket_bidirectional_communication() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
 
     let (mut ws_stream, _response) = connect_async(&ws_url)
         .await
@@ -407,7 +435,8 @@ async fn test_websocket_multiple_outputs() {
     let broker = Broker::new();
     let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -420,10 +449,13 @@ async fn test_websocket_multiple_outputs() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
-    let ws_url = format!("ws://{}/ws/raw", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/raw", addr);
 
     let (mut ws_stream, _response) = connect_async(&ws_url)
         .await
@@ -485,7 +517,7 @@ async fn test_input_wrong_method_returns_error() {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/input")
+                .uri("/sessions/test/input")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -521,7 +553,8 @@ async fn test_websocket_line_event_includes_total_lines() {
     let broker = Broker::new();
     let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -534,10 +567,13 @@ async fn test_websocket_line_event_includes_total_lines() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     let addr = start_test_server(app).await;
-    let ws_url = format!("ws://{}/ws/json", addr);
+    let ws_url = format!("ws://{}/sessions/test/ws/json", addr);
 
     // Connect WebSocket client
     let (mut ws_stream, _response) = connect_async(&ws_url)
@@ -602,7 +638,8 @@ async fn test_scrollback_endpoint() {
     let broker = Broker::new();
     let output_tx = broker.sender();
     let parser = Parser::spawn(&broker, 80, 5, 1000); // 5-row screen to get scrollback quickly
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: output_tx.clone(),
         shutdown: ShutdownCoordinator::new(),
@@ -615,6 +652,9 @@ async fn test_scrollback_endpoint() {
         terminal_size: wsh::terminal::TerminalSize::new(5, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     // Send enough lines to create scrollback (more than 5 rows)
@@ -630,7 +670,7 @@ async fn test_scrollback_endpoint() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/scrollback?format=plain")
+                .uri("/sessions/test/scrollback?format=plain")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -659,7 +699,8 @@ async fn test_scrollback_initial_state() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -672,13 +713,16 @@ async fn test_scrollback_initial_state() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
     };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = AppState { sessions: registry, shutdown: ShutdownCoordinator::new() };
     let app = router(state, None);
 
     // Query immediately without any output
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/scrollback?format=plain")
+                .uri("/sessions/test/scrollback?format=plain")
                 .body(Body::empty())
                 .unwrap(),
         )

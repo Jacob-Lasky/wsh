@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
-        State,
+        Path, State,
     },
     http::StatusCode,
     response::IntoResponse,
@@ -24,9 +24,10 @@ use crate::parser::{
     events::EventType,
     state::{Format, Query},
 };
+use crate::session::Session;
 
 use super::error::ApiError;
-use super::AppState;
+use super::{get_session, AppState};
 
 #[derive(Serialize)]
 pub(super) struct HealthResponse {
@@ -39,31 +40,39 @@ pub(super) async fn health() -> Json<HealthResponse> {
 
 pub(super) async fn input(
     State(state): State<AppState>,
+    Path(name): Path<String>,
     body: Bytes,
 ) -> Result<StatusCode, ApiError> {
-    state.input_tx.send(body).await.map_err(|e| {
+    let session = get_session(&state.sessions, &name)?;
+    session.input_tx.send(body).await.map_err(|e| {
         tracing::error!("Failed to send input to PTY: {}", e);
         ApiError::InputSendFailed
     })?;
-    state.activity.touch();
+    session.activity.touch();
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn ws_raw(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_ws_raw(socket, state))
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(ws.on_upgrade(|socket| handle_ws_raw(socket, session, state.shutdown)))
 }
 
-async fn handle_ws_raw(socket: WebSocket, state: AppState) {
+async fn handle_ws_raw(
+    socket: WebSocket,
+    session: Session,
+    shutdown: crate::shutdown::ShutdownCoordinator,
+) {
     // Register this connection for graceful shutdown tracking
-    let (_guard, mut shutdown_rx) = state.shutdown.register();
+    let (_guard, mut shutdown_rx) = shutdown.register();
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    let mut output_rx = state.output_rx.subscribe();
-    let input_tx = state.input_tx.clone();
+    let mut output_rx = session.output_rx.subscribe();
+    let input_tx = session.input_tx.clone();
 
     // Main loop: handle PTY output, WebSocket input, and shutdown signal
     loop {
@@ -122,12 +131,18 @@ async fn handle_ws_raw(socket: WebSocket, state: AppState) {
 pub(super) async fn ws_json(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_ws_json(socket, state))
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(ws.on_upgrade(|socket| handle_ws_json(socket, session, state.shutdown)))
 }
 
-async fn handle_ws_json(socket: WebSocket, state: AppState) {
-    let (_guard, mut shutdown_rx) = state.shutdown.register();
+async fn handle_ws_json(
+    socket: WebSocket,
+    session: Session,
+    shutdown: crate::shutdown::ShutdownCoordinator,
+) {
+    let (_guard, mut shutdown_rx) = shutdown.register();
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Send connected message
@@ -144,7 +159,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
     let mut subscribed_types: Vec<crate::parser::events::EventType> = Vec::new();
 
     // Subscribe to parser events (stream is always active, filtering is local)
-    let mut events = Box::pin(state.parser.subscribe());
+    let mut events = Box::pin(session.parser.subscribe());
 
     // Input subscription (lazily created when EventType::Input is subscribed)
     let mut input_rx: Option<tokio::sync::broadcast::Receiver<crate::input::InputEvent>> = None;
@@ -228,7 +243,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                 let (req_id, format, _) = pending_quiesce.take().unwrap();
                 if result {
                     // Quiescent — query screen and return
-                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = state
+                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
                         .parser
                         .query(crate::parser::state::Query::Screen { format })
                         .await
@@ -274,7 +289,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                 match signal {
                     Some(()) => {
                         // Emit a sync event
-                        if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = state
+                        if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
                             .parser
                             .query(crate::parser::state::Query::Screen { format: quiesce_sub_format })
                             .await
@@ -328,7 +343,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                                     // Set up input subscription if needed
                                     if subscribed_types.contains(&EventType::Input) {
                                         if input_rx.is_none() {
-                                            input_rx = Some(state.input_broadcaster.subscribe());
+                                            input_rx = Some(session.input_broadcaster.subscribe());
                                         }
                                     } else {
                                         input_rx = None;
@@ -342,7 +357,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
 
                                     if params.quiesce_ms > 0 {
                                         let timeout = std::time::Duration::from_millis(params.quiesce_ms);
-                                        let activity = state.activity.clone();
+                                        let activity = session.activity.clone();
                                         let (tx, rx) = tokio::sync::mpsc::channel(1);
                                         quiesce_sub_rx = Some(rx);
                                         quiesce_sub_format = sub_format;
@@ -380,7 +395,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                                     }
 
                                     // Send sync event
-                                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = state
+                                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
                                         .parser
                                         .query(crate::parser::state::Query::Screen { format: sub_format })
                                         .await
@@ -417,7 +432,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                                 Ok(params) => {
                                     let timeout = std::time::Duration::from_millis(params.timeout_ms);
                                     let format = params.format;
-                                    let activity = state.activity.clone();
+                                    let activity = session.activity.clone();
 
                                     let fut: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> = if let Some(max_wait) = params.max_wait_ms {
                                         let deadline = std::time::Duration::from_millis(max_wait);
@@ -450,7 +465,7 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                             }
                         } else {
                             // Dispatch all other methods
-                            let resp = super::ws_methods::dispatch(&req, &state).await;
+                            let resp = super::ws_methods::dispatch(&req, &session).await;
                             if let Ok(json) = serde_json::to_string(&resp) {
                                 if ws_tx.send(Message::Text(json)).await.is_err() {
                                     break;
@@ -500,17 +515,19 @@ fn default_max_wait() -> u64 {
 
 pub(super) async fn quiesce(
     State(state): State<AppState>,
+    Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<QuiesceQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
     let timeout = std::time::Duration::from_millis(params.timeout_ms);
     let deadline = std::time::Duration::from_millis(params.max_wait_ms);
 
-    let quiesce_fut = state.activity.wait_for_quiescence(timeout);
+    let quiesce_fut = session.activity.wait_for_quiescence(timeout);
 
     match tokio::time::timeout(deadline, quiesce_fut).await {
         Ok(()) => {
             // Quiescent — query screen state
-            let response = state
+            let response = session
                 .parser
                 .query(Query::Screen { format: params.format })
                 .await
@@ -542,9 +559,11 @@ pub(super) struct ScreenQuery {
 
 pub(super) async fn screen(
     State(state): State<AppState>,
+    Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<ScreenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let response = state
+    let session = get_session(&state.sessions, &name)?;
+    let response = session
         .parser
         .query(Query::Screen { format: params.format })
         .await
@@ -569,9 +588,11 @@ fn default_limit() -> usize {
 
 pub(super) async fn scrollback(
     State(state): State<AppState>,
+    Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<ScrollbackQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let response = state
+    let session = get_session(&state.sessions, &name)?;
+    let response = session
         .parser
         .query(Query::Scrollback {
             format: params.format,
@@ -633,23 +654,30 @@ pub(super) struct PatchOverlayRequest {
 // Overlay handlers
 pub(super) async fn overlay_create(
     State(state): State<AppState>,
+    Path(name): Path<String>,
     Json(req): Json<CreateOverlayRequest>,
-) -> (StatusCode, Json<CreateOverlayResponse>) {
-    let id = state.overlays.create(req.x, req.y, req.z, req.spans);
-    let all = state.overlays.list();
+) -> Result<(StatusCode, Json<CreateOverlayResponse>), ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let id = session.overlays.create(req.x, req.y, req.z, req.spans);
+    let all = session.overlays.list();
     flush_overlays_to_stdout(&[], &all);
-    (StatusCode::CREATED, Json(CreateOverlayResponse { id }))
+    Ok((StatusCode::CREATED, Json(CreateOverlayResponse { id })))
 }
 
-pub(super) async fn overlay_list(State(state): State<AppState>) -> Json<Vec<Overlay>> {
-    Json(state.overlays.list())
+pub(super) async fn overlay_list(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<Overlay>>, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(Json(session.overlays.list()))
 }
 
 pub(super) async fn overlay_get(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
 ) -> Result<Json<Overlay>, ApiError> {
-    state
+    let session = get_session(&state.sessions, &name)?;
+    session
         .overlays
         .get(&id)
         .map(Json)
@@ -658,15 +686,16 @@ pub(super) async fn overlay_get(
 
 pub(super) async fn overlay_update(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
     Json(req): Json<UpdateOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let old = state
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
         .overlays
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
-    if state.overlays.update(&id, req.spans) {
-        let all = state.overlays.list();
+    if session.overlays.update(&id, req.spans) {
+        let all = session.overlays.list();
         flush_overlays_to_stdout(&[old], &all);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -676,15 +705,16 @@ pub(super) async fn overlay_update(
 
 pub(super) async fn overlay_patch(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
     Json(req): Json<PatchOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let old = state
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
         .overlays
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
-    if state.overlays.move_to(&id, req.x, req.y, req.z) {
-        let all = state.overlays.list();
+    if session.overlays.move_to(&id, req.x, req.y, req.z) {
+        let all = session.overlays.list();
         flush_overlays_to_stdout(&[old], &all);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -694,14 +724,15 @@ pub(super) async fn overlay_patch(
 
 pub(super) async fn overlay_delete(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let old = state
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
         .overlays
         .get(&id)
         .ok_or_else(|| ApiError::OverlayNotFound(id.clone()))?;
-    if state.overlays.delete(&id) {
-        let remaining = state.overlays.list();
+    if session.overlays.delete(&id) {
+        let remaining = session.overlays.list();
         flush_overlays_to_stdout(&[old], &remaining);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -709,11 +740,15 @@ pub(super) async fn overlay_delete(
     }
 }
 
-pub(super) async fn overlay_clear(State(state): State<AppState>) -> StatusCode {
-    let old_list = state.overlays.list();
-    state.overlays.clear();
+pub(super) async fn overlay_clear(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let old_list = session.overlays.list();
+    session.overlays.clear();
     flush_overlays_to_stdout(&old_list, &[]);
-    StatusCode::NO_CONTENT
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // Panel request/response types
@@ -752,25 +787,32 @@ pub(super) struct PatchPanelRequest {
 
 pub(super) async fn panel_create(
     State(state): State<AppState>,
+    Path(name): Path<String>,
     Json(req): Json<CreatePanelRequest>,
-) -> (StatusCode, Json<CreatePanelResponse>) {
-    let id = state
+) -> Result<(StatusCode, Json<CreatePanelResponse>), ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    let id = session
         .panels
         .create(req.position, req.height, req.z, req.spans);
-    panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+    panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
-    (StatusCode::CREATED, Json(CreatePanelResponse { id }))
+    Ok((StatusCode::CREATED, Json(CreatePanelResponse { id })))
 }
 
-pub(super) async fn panel_list(State(state): State<AppState>) -> Json<Vec<Panel>> {
-    Json(state.panels.list())
+pub(super) async fn panel_list(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Vec<Panel>>, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(Json(session.panels.list()))
 }
 
 pub(super) async fn panel_get(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
 ) -> Result<Json<Panel>, ApiError> {
-    state
+    let session = get_session(&state.sessions, &name)?;
+    session
         .panels
         .get(&id)
         .map(Json)
@@ -779,16 +821,17 @@ pub(super) async fn panel_get(
 
 pub(super) async fn panel_update(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
     Json(req): Json<UpdatePanelRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let old = state
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
         .panels
         .get(&id)
         .ok_or_else(|| ApiError::PanelNotFound(id.clone()))?;
 
     // Full replace: update all fields via patch
-    if !state
+    if !session
         .panels
         .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), Some(req.spans))
     {
@@ -800,10 +843,10 @@ pub(super) async fn panel_update(
         old.position != req.position || old.height != req.height || old.z != req.z;
 
     if needs_reconfigure {
-        panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+        panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
             .await;
     } else {
-        panel::flush_panel_content(&state.panels, &id, &state.terminal_size);
+        panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -811,15 +854,16 @@ pub(super) async fn panel_update(
 
 pub(super) async fn panel_patch(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
     Json(req): Json<PatchPanelRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let old = state
+    let session = get_session(&state.sessions, &name)?;
+    let old = session
         .panels
         .get(&id)
         .ok_or_else(|| ApiError::PanelNotFound(id.clone()))?;
 
-    if !state
+    if !session
         .panels
         .patch(&id, req.position.clone(), req.height, req.z, req.spans.clone())
     {
@@ -832,10 +876,10 @@ pub(super) async fn panel_patch(
         || req.z.is_some_and(|z| z != old.z);
 
     if needs_reconfigure {
-        panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+        panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
             .await;
     } else if req.spans.is_some() {
-        panel::flush_panel_content(&state.panels, &id, &state.terminal_size);
+        panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -843,21 +887,26 @@ pub(super) async fn panel_patch(
 
 pub(super) async fn panel_delete(
     State(state): State<AppState>,
-    axum::extract::Path(id): axum::extract::Path<String>,
+    Path((name, id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    if !state.panels.delete(&id) {
+    let session = get_session(&state.sessions, &name)?;
+    if !session.panels.delete(&id) {
         return Err(ApiError::PanelNotFound(id));
     }
-    panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+    panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn panel_clear(State(state): State<AppState>) -> StatusCode {
-    state.panels.clear();
-    panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+pub(super) async fn panel_clear(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    session.panels.clear();
+    panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
-    StatusCode::NO_CONTENT
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // Input mode response type
@@ -867,20 +916,32 @@ pub(super) struct InputModeResponse {
 }
 
 // Input mode handlers
-pub(super) async fn input_mode_get(State(state): State<AppState>) -> Json<InputModeResponse> {
-    Json(InputModeResponse {
-        mode: state.input_mode.get(),
-    })
+pub(super) async fn input_mode_get(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<InputModeResponse>, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    Ok(Json(InputModeResponse {
+        mode: session.input_mode.get(),
+    }))
 }
 
-pub(super) async fn input_capture(State(state): State<AppState>) -> StatusCode {
-    state.input_mode.capture();
-    StatusCode::NO_CONTENT
+pub(super) async fn input_capture(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    session.input_mode.capture();
+    Ok(StatusCode::NO_CONTENT)
 }
 
-pub(super) async fn input_release(State(state): State<AppState>) -> StatusCode {
-    state.input_mode.release();
-    StatusCode::NO_CONTENT
+pub(super) async fn input_release(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = get_session(&state.sessions, &name)?;
+    session.input_mode.release();
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn openapi_spec() -> impl IntoResponse {

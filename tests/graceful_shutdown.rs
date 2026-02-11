@@ -63,7 +63,7 @@ async fn test_websocket_receives_close_frame_on_shutdown() {
         .expect("wsh should become ready");
 
     // 3. Connect WebSocket client
-    let ws_url = format!("ws://127.0.0.1:{}/ws/json", port);
+    let ws_url = format!("ws://127.0.0.1:{}/sessions/default/ws/json", port);
     let (ws_stream, _response) = timeout(WS_CONNECT_TIMEOUT, connect_async(&ws_url))
         .await
         .expect("WebSocket connect should not timeout")
@@ -239,7 +239,7 @@ async fn test_unsubscribed_websocket_receives_close_frame_on_shutdown() {
         .expect("wsh should become ready");
 
     // 3. Connect WebSocket client
-    let ws_url = format!("ws://127.0.0.1:{}/ws/json", port);
+    let ws_url = format!("ws://127.0.0.1:{}/sessions/default/ws/json", port);
     let (ws_stream, _response) = timeout(WS_CONNECT_TIMEOUT, connect_async(&ws_url))
         .await
         .expect("WebSocket connect should not timeout")

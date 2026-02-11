@@ -21,7 +21,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{activity::ActivityTracker, api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, panel::{self, PanelStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{activity::ActivityTracker, api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, panel::{self, PanelStore}, parser::Parser, pty::{self, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -179,8 +179,9 @@ async fn main() -> Result<(), WshError> {
     spawn_pty_writer(pty_writer, input_rx);
     spawn_stdin_reader(input_tx.clone(), input_mode.clone(), input_broadcaster.clone(), activity.clone());
 
-    // Start API server with graceful shutdown support
-    let state = api::AppState {
+    // Build the session and register it
+    let session = Session {
+        name: "default".to_string(),
         input_tx,
         output_rx: broker.sender(),
         shutdown: shutdown.clone(),
@@ -192,6 +193,14 @@ async fn main() -> Result<(), WshError> {
         input_mode: input_mode.clone(),
         input_broadcaster: input_broadcaster.clone(),
         activity: activity.clone(),
+    };
+    let sessions = SessionRegistry::new();
+    sessions.insert(Some("default".into()), session).unwrap();
+
+    // Start API server with graceful shutdown support
+    let state = api::AppState {
+        sessions,
+        shutdown: shutdown.clone(),
     };
     let app = api::router(state, token);
     tracing::info!(addr = %args.bind, "API server listening");

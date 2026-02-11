@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, shutdown::ShutdownCoordinator};
+use wsh::{api, broker::Broker, input::{InputBroadcaster, InputMode}, overlay::OverlayStore, parser::Parser, pty::{Pty, SpawnCommand}, session::{Session, SessionRegistry}, shutdown::ShutdownCoordinator};
 
 /// Starts an HTTP server and returns its address
 async fn start_server(app: axum::Router) -> SocketAddr {
@@ -74,7 +74,8 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
 
     // === Setup HTTP Server ===
     let parser = Parser::spawn(&broker, 80, 24, 1000);
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -86,6 +87,12 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -109,7 +116,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
 
     let request = hyper::Request::builder()
         .method("POST")
-        .uri("/input")
+        .uri("/sessions/test/input")
         .body(http_body_util::Full::new(Bytes::from(cmd)))
         .expect("Failed to build request");
 
@@ -214,7 +221,8 @@ async fn test_scrollback_endpoint_with_real_pty() {
 
     // === Setup HTTP Server ===
     let parser = Parser::spawn(&broker, 80, 5, 1000); // 80 cols, 5 rows
-    let state = api::AppState {
+    let session = Session {
+        name: "test".to_string(),
         input_tx: input_tx.clone(),
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),
@@ -226,6 +234,12 @@ async fn test_scrollback_endpoint_with_real_pty() {
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(5, 80),
         activity: wsh::activity::ActivityTracker::new(),
+    };
+    let registry = SessionRegistry::new();
+    registry.insert(Some("test".into()), session).unwrap();
+    let state = api::AppState {
+        sessions: registry,
+        shutdown: ShutdownCoordinator::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -246,7 +260,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
 
         let request = hyper::Request::builder()
             .method("POST")
-            .uri("/input")
+            .uri("/sessions/test/input")
             .body(http_body_util::Full::new(Bytes::from(cmd)))
             .expect("Failed to build request");
 
@@ -268,7 +282,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
 
     let request = hyper::Request::builder()
         .method("GET")
-        .uri("/scrollback?format=plain")
+        .uri("/sessions/test/scrollback?format=plain")
         .body(http_body_util::Full::new(Bytes::new()))
         .expect("Failed to build request");
 

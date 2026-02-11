@@ -29,6 +29,8 @@ pub enum ApiError {
     InvalidInputMode(String),
     /// 400 - Invalid format parameter.
     InvalidFormat(String),
+    /// 404 - A specific session name was not found.
+    SessionNotFound(String),
     /// 503 - Internal channel is full; back-pressure signal.
     ChannelFull,
     /// 503 - Terminal parser actor is unavailable.
@@ -54,6 +56,7 @@ impl ApiError {
             ApiError::InvalidOverlay(_) => StatusCode::BAD_REQUEST,
             ApiError::InvalidInputMode(_) => StatusCode::BAD_REQUEST,
             ApiError::InvalidFormat(_) => StatusCode::BAD_REQUEST,
+            ApiError::SessionNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::ChannelFull => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::ParserUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::InputSendFailed => StatusCode::INTERNAL_SERVER_ERROR,
@@ -74,6 +77,7 @@ impl ApiError {
             ApiError::InvalidOverlay(_) => "invalid_overlay",
             ApiError::InvalidInputMode(_) => "invalid_input_mode",
             ApiError::InvalidFormat(_) => "invalid_format",
+            ApiError::SessionNotFound(_) => "session_not_found",
             ApiError::ChannelFull => "channel_full",
             ApiError::ParserUnavailable => "parser_unavailable",
             ApiError::InputSendFailed => "input_send_failed",
@@ -96,6 +100,7 @@ impl ApiError {
             ApiError::InvalidOverlay(detail) => format!("Invalid overlay: {}.", detail),
             ApiError::InvalidInputMode(detail) => format!("Invalid input mode: {}.", detail),
             ApiError::InvalidFormat(detail) => format!("Invalid format: {}.", detail),
+            ApiError::SessionNotFound(name) => format!("Session not found: {}.", name),
             ApiError::ChannelFull => "Server is overloaded. Try again shortly.".to_string(),
             ApiError::ParserUnavailable => "Terminal parser is unavailable.".to_string(),
             ApiError::InputSendFailed => "Failed to send input to terminal.".to_string(),
@@ -208,6 +213,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_not_found_status() {
+        let (status, _) = response_parts(ApiError::SessionNotFound("x".into())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn internal_error_status() {
         let (status, _) = response_parts(ApiError::InternalError("x".into())).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -282,6 +293,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_not_found_code() {
+        let (_, json) = response_parts(ApiError::SessionNotFound("d".into())).await;
+        assert_eq!(json["error"]["code"], "session_not_found");
+    }
+
+    #[tokio::test]
     async fn internal_error_code() {
         let (_, json) = response_parts(ApiError::InternalError("d".into())).await;
         assert_eq!(json["error"]["code"], "internal_error");
@@ -326,6 +343,13 @@ mod tests {
             response_parts(ApiError::InvalidFormat("expected 'html' or 'text'".into())).await;
         let msg = json["error"]["message"].as_str().unwrap();
         assert_eq!(msg, "Invalid format: expected 'html' or 'text'.");
+    }
+
+    #[tokio::test]
+    async fn session_not_found_includes_name() {
+        let (_, json) = response_parts(ApiError::SessionNotFound("my-session".into())).await;
+        let msg = json["error"]["message"].as_str().unwrap();
+        assert_eq!(msg, "Session not found: my-session.");
     }
 
     #[tokio::test]

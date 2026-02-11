@@ -7,38 +7,29 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use bytes::Bytes;
-use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
 
-use crate::activity::ActivityTracker;
-use crate::input::{InputBroadcaster, InputMode};
-use crate::overlay::OverlayStore;
-use crate::panel::PanelStore;
-use crate::parser::Parser;
-use crate::pty::Pty;
+use crate::session::SessionRegistry;
 use crate::shutdown::ShutdownCoordinator;
-use crate::terminal::TerminalSize;
 
 use handlers::*;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub input_tx: mpsc::Sender<Bytes>,
-    pub output_rx: broadcast::Sender<Bytes>,
+    pub sessions: SessionRegistry,
     pub shutdown: ShutdownCoordinator,
-    pub parser: Parser,
-    pub overlays: OverlayStore,
-    pub panels: PanelStore,
-    pub pty: Arc<Pty>,
-    pub terminal_size: TerminalSize,
-    pub input_mode: InputMode,
-    pub input_broadcaster: InputBroadcaster,
-    pub activity: ActivityTracker,
+}
+
+pub(crate) fn get_session(
+    sessions: &SessionRegistry,
+    name: &str,
+) -> Result<crate::session::Session, error::ApiError> {
+    sessions
+        .get(name)
+        .ok_or_else(|| error::ApiError::SessionNotFound(name.to_string()))
 }
 
 pub fn router(state: AppState, token: Option<String>) -> Router {
-    let protected = Router::new()
+    let session_routes = Router::new()
         .route("/input", post(input))
         .route("/input/mode", get(input_mode_get))
         .route("/input/capture", post(input_capture))
@@ -73,7 +64,10 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .put(panel_update)
                 .patch(panel_patch)
                 .delete(panel_delete),
-        )
+        );
+
+    let protected = Router::new()
+        .nest("/sessions/:name", session_routes)
         .with_state(state);
 
     let protected = match token {
@@ -94,42 +88,54 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activity::ActivityTracker;
     use crate::broker::Broker;
     use crate::input::InputMode;
+    use crate::overlay::OverlayStore;
+    use crate::parser::Parser;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
     };
+    use bytes::Bytes;
+    use tokio::sync::mpsc;
     use tower::ServiceExt; // for oneshot()
 
-    /// Creates a test state and returns both the state and the input receiver.
-    /// The receiver must be kept alive for the duration of the test to prevent
-    /// send failures.
-    fn create_test_state() -> (AppState, mpsc::Receiver<Bytes>) {
+    /// Creates a test state and returns both the state, the input receiver,
+    /// and the session name (for URL construction).
+    fn create_test_state() -> (AppState, mpsc::Receiver<Bytes>, String) {
         let (input_tx, input_rx) = mpsc::channel(64);
         let broker = Broker::new();
         let parser = Parser::spawn(&broker, 80, 24, 1000);
-        let pty = crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default())
-            .expect("failed to spawn PTY for test");
-        let state = AppState {
+        let session = crate::session::Session {
+            name: "test".to_string(),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
             parser,
             overlays: OverlayStore::new(),
             panels: crate::panel::PanelStore::new(),
-            pty: std::sync::Arc::new(pty),
+            pty: std::sync::Arc::new(
+                crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default())
+                    .expect("failed to spawn PTY for test"),
+            ),
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             input_mode: InputMode::new(),
             input_broadcaster: crate::input::InputBroadcaster::new(),
             activity: ActivityTracker::new(),
         };
-        (state, input_rx)
+        let registry = crate::session::SessionRegistry::new();
+        registry.insert(Some("test".into()), session).unwrap();
+        let state = AppState {
+            sessions: registry,
+            shutdown: ShutdownCoordinator::new(),
+        };
+        (state, input_rx, "test".to_string())
     }
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let response = app
@@ -148,14 +154,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_endpoint_success() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input")
+                    .uri("/sessions/test/input")
                     .body(Body::from("test input"))
                     .unwrap(),
             )
@@ -167,7 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_endpoint_forwards_to_channel() {
-        let (state, mut input_rx) = create_test_state();
+        let (state, mut input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let test_data = b"hello world";
@@ -175,7 +181,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input")
+                    .uri("/sessions/test/input")
                     .body(Body::from(test_data.to_vec()))
                     .unwrap(),
             )
@@ -191,7 +197,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_router_has_correct_routes() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         // Test /health exists (GET)
@@ -202,13 +208,13 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // Test /input exists (POST)
+        // Test /sessions/test/input exists (POST)
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input")
+                    .uri("/sessions/test/input")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -216,12 +222,12 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
-        // Test /ws/raw exists (GET) - will return upgrade required since we're not using WebSocket
+        // Test /sessions/test/ws/raw exists (GET) - will return upgrade required since we're not using WebSocket
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/ws/raw")
+                    .uri("/sessions/test/ws/raw")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -246,7 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_overlay_create() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let body = serde_json::json!({
@@ -261,7 +267,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/overlay")
+                    .uri("/sessions/test/overlay")
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_string(&body).unwrap()))
                     .unwrap(),
@@ -281,29 +287,32 @@ mod tests {
 
     #[tokio::test]
     async fn test_overlay_list() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
 
         // Pre-populate with an overlay
-        state.overlays.create(
-            1,
-            2,
-            None,
-            vec![crate::overlay::OverlaySpan {
-                text: "Test".to_string(),
-                fg: None,
-                bg: None,
-                bold: false,
-                italic: false,
-                underline: false,
-            }],
-        );
+        {
+            let session = state.sessions.get("test").unwrap();
+            session.overlays.create(
+                1,
+                2,
+                None,
+                vec![crate::overlay::OverlaySpan {
+                    text: "Test".to_string(),
+                    fg: None,
+                    bg: None,
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                }],
+            );
+        }
 
         let app = router(state, None);
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/overlay")
+                    .uri("/sessions/test/overlay")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -323,10 +332,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_overlay_delete() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
 
         // Create an overlay
-        let id = state.overlays.create(0, 0, None, vec![]);
+        let id = {
+            let session = state.sessions.get("test").unwrap();
+            session.overlays.create(0, 0, None, vec![])
+        };
 
         let app = router(state, None);
 
@@ -334,7 +346,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(format!("/overlay/{}", id))
+                    .uri(format!("/sessions/test/overlay/{}", id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -346,13 +358,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_mode_default() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/input/mode")
+                    .uri("/sessions/test/input/mode")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -370,7 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_capture_and_release() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         // Switch to capture mode
@@ -379,7 +391,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input/capture")
+                    .uri("/sessions/test/input/capture")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -392,7 +404,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/input/mode")
+                    .uri("/sessions/test/input/mode")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -412,7 +424,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/input/release")
+                    .uri("/sessions/test/input/release")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -424,7 +436,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/input/mode")
+                    .uri("/sessions/test/input/mode")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -441,7 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_openapi_spec_endpoint() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let response = app
@@ -474,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_docs_endpoint() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
         let response = app
@@ -507,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_docs_and_openapi_exempt_from_auth() {
-        let (state, _input_rx) = create_test_state();
+        let (state, _input_rx, _name) = create_test_state();
         let app = router(state, Some("secret-token".to_string()));
 
         // /openapi.yaml should work without auth
@@ -536,11 +548,11 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // /screen should require auth
+        // /sessions/test/screen should require auth
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/screen")
+                    .uri("/sessions/test/screen")
                     .body(Body::empty())
                     .unwrap(),
             )
