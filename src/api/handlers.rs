@@ -19,6 +19,7 @@ use std::io::Write;
 
 use crate::input::Mode;
 use crate::overlay::{self, Overlay, OverlaySpan};
+use crate::panel::{self, Panel, Position};
 use crate::parser::{
     events::EventType,
     state::{Format, Query},
@@ -495,6 +496,150 @@ pub(super) async fn overlay_clear(State(state): State<AppState>) -> StatusCode {
     let old_list = state.overlays.list();
     state.overlays.clear();
     flush_overlays_to_stdout(&old_list, &[]);
+    StatusCode::NO_CONTENT
+}
+
+// Panel request/response types
+
+#[derive(Deserialize)]
+pub(super) struct CreatePanelRequest {
+    position: Position,
+    height: u16,
+    z: Option<i32>,
+    #[serde(default)]
+    spans: Vec<OverlaySpan>,
+}
+
+#[derive(Serialize)]
+pub(super) struct CreatePanelResponse {
+    id: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UpdatePanelRequest {
+    position: Position,
+    height: u16,
+    z: i32,
+    spans: Vec<OverlaySpan>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PatchPanelRequest {
+    position: Option<Position>,
+    height: Option<u16>,
+    z: Option<i32>,
+    spans: Option<Vec<OverlaySpan>>,
+}
+
+// Panel handlers
+
+pub(super) async fn panel_create(
+    State(state): State<AppState>,
+    Json(req): Json<CreatePanelRequest>,
+) -> (StatusCode, Json<CreatePanelResponse>) {
+    let id = state
+        .panels
+        .create(req.position, req.height, req.z, req.spans);
+    panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+        .await;
+    (StatusCode::CREATED, Json(CreatePanelResponse { id }))
+}
+
+pub(super) async fn panel_list(State(state): State<AppState>) -> Json<Vec<Panel>> {
+    Json(state.panels.list())
+}
+
+pub(super) async fn panel_get(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<Panel>, ApiError> {
+    state
+        .panels
+        .get(&id)
+        .map(Json)
+        .ok_or(ApiError::PanelNotFound(id))
+}
+
+pub(super) async fn panel_update(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<UpdatePanelRequest>,
+) -> Result<StatusCode, ApiError> {
+    let old = state
+        .panels
+        .get(&id)
+        .ok_or_else(|| ApiError::PanelNotFound(id.clone()))?;
+
+    // Full replace: update all fields via patch
+    if !state
+        .panels
+        .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), Some(req.spans))
+    {
+        return Err(ApiError::PanelNotFound(id));
+    }
+
+    // Check if layout-affecting fields changed
+    let needs_reconfigure =
+        old.position != req.position || old.height != req.height || old.z != req.z;
+
+    if needs_reconfigure {
+        panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+            .await;
+    } else {
+        panel::flush_panel_content(&state.panels, &id, &state.terminal_size);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn panel_patch(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<PatchPanelRequest>,
+) -> Result<StatusCode, ApiError> {
+    let old = state
+        .panels
+        .get(&id)
+        .ok_or_else(|| ApiError::PanelNotFound(id.clone()))?;
+
+    if !state
+        .panels
+        .patch(&id, req.position.clone(), req.height, req.z, req.spans.clone())
+    {
+        return Err(ApiError::PanelNotFound(id));
+    }
+
+    // Check if layout-affecting fields changed
+    let needs_reconfigure = req.position.is_some_and(|p| p != old.position)
+        || req.height.is_some_and(|h| h != old.height)
+        || req.z.is_some_and(|z| z != old.z);
+
+    if needs_reconfigure {
+        panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+            .await;
+    } else if req.spans.is_some() {
+        panel::flush_panel_content(&state.panels, &id, &state.terminal_size);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn panel_delete(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if !state.panels.delete(&id) {
+        return Err(ApiError::PanelNotFound(id));
+    }
+    panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+        .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn panel_clear(State(state): State<AppState>) -> StatusCode {
+    state.panels.clear();
+    panel::reconfigure_layout(&state.panels, &state.terminal_size, &state.pty, &state.parser)
+        .await;
     StatusCode::NO_CONTENT
 }
 

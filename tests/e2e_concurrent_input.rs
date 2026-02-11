@@ -28,7 +28,7 @@ async fn start_server(app: axum::Router) -> SocketAddr {
 /// Test that input from multiple sources all reach the PTY correctly.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_concurrent_input_from_multiple_sources() {
-    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
+    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
     let mut pty_reader = pty.take_reader().expect("Failed to get reader");
     let mut pty_writer = pty.take_writer().expect("Failed to get writer");
 
@@ -74,6 +74,9 @@ async fn test_concurrent_input_from_multiple_sources() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: pty.clone(),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -173,7 +176,7 @@ async fn test_concurrent_input_from_multiple_sources() {
 /// Test rapid sequential HTTP requests all reach the PTY.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rapid_http_requests() {
-    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
+    let pty = Arc::new(Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY"));
     let mut pty_reader = pty.take_reader().expect("Failed to get reader");
     let mut pty_writer = pty.take_writer().expect("Failed to get writer");
 
@@ -217,6 +220,9 @@ async fn test_rapid_http_requests() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: pty.clone(),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

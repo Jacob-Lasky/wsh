@@ -17,10 +17,11 @@ use bytes::Bytes;
 use clap::Parser as ClapParser;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, panel::{self, PanelStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -129,6 +130,12 @@ async fn main() -> Result<(), WshError> {
     let pty_writer = pty.take_writer()?;
     let mut pty_child = pty.take_child().expect("child process");
 
+    // Wrap PTY in Arc for shared resize access from API handlers
+    let pty = Arc::new(pty);
+
+    // Shared terminal size for layout computation
+    let terminal_size = terminal::TerminalSize::new(rows, cols);
+
     // Channel to signal when child process exits
     let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -155,6 +162,9 @@ async fn main() -> Result<(), WshError> {
     // Create overlay store before AppState so it can be shared with pty_reader
     let overlays = OverlayStore::new();
 
+    // Create panel store
+    let panels = PanelStore::new();
+
     // Create input_mode before AppState so it can be shared with stdin reader
     let input_mode = InputMode::new();
 
@@ -173,6 +183,9 @@ async fn main() -> Result<(), WshError> {
         shutdown: shutdown.clone(),
         parser: parser.clone(),
         overlays: overlays.clone(),
+        panels: panels.clone(),
+        pty: pty.clone(),
+        terminal_size: terminal_size.clone(),
         input_mode: input_mode.clone(),
         input_broadcaster: input_broadcaster.clone(),
     };
@@ -192,6 +205,38 @@ async fn main() -> Result<(), WshError> {
             .await
             .unwrap();
     });
+
+    // SIGWINCH handler: reconfigure layout when terminal is resized
+    {
+        let panels = panels.clone();
+        let terminal_size = terminal_size.clone();
+        let pty = pty.clone();
+        let parser = parser.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigwinch =
+                signal(SignalKind::window_change()).expect("failed to install SIGWINCH handler");
+            loop {
+                sigwinch.recv().await;
+                let (new_rows, new_cols) =
+                    terminal::terminal_size().unwrap_or((terminal_size.get().0, terminal_size.get().1));
+                tracing::debug!(new_rows, new_cols, "SIGWINCH received");
+                terminal_size.set(new_rows, new_cols);
+
+                if panels.list().is_empty() {
+                    // No panels: just resize PTY and parser directly
+                    if let Err(e) = pty.resize(new_rows, new_cols) {
+                        tracing::error!(?e, "failed to resize PTY on SIGWINCH");
+                    }
+                    if let Err(e) = parser.resize(new_cols as usize, new_rows as usize).await {
+                        tracing::error!(?e, "failed to resize parser on SIGWINCH");
+                    }
+                } else {
+                    panel::reconfigure_layout(&panels, &terminal_size, &pty, &parser).await;
+                }
+            }
+        });
+    }
 
     // Wait for exit condition
     wait_for_exit(child_exit_rx, pty_reader_handle).await;

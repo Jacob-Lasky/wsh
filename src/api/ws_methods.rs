@@ -179,6 +179,48 @@ pub struct PatchOverlayParams {
 }
 
 // ---------------------------------------------------------------------------
+// Panel param types
+// ---------------------------------------------------------------------------
+
+use crate::panel::Position;
+
+/// Parameters that identify a panel by id (get / delete).
+#[derive(Debug, Deserialize)]
+pub struct PanelIdParams {
+    pub id: String,
+}
+
+/// Parameters for creating a new panel.
+#[derive(Debug, Deserialize)]
+pub struct CreatePanelParams {
+    pub position: Position,
+    pub height: u16,
+    pub z: Option<i32>,
+    #[serde(default)]
+    pub spans: Vec<OverlaySpan>,
+}
+
+/// Parameters for fully replacing a panel.
+#[derive(Debug, Deserialize)]
+pub struct UpdatePanelParams {
+    pub id: String,
+    pub position: Position,
+    pub height: u16,
+    pub z: i32,
+    pub spans: Vec<OverlaySpan>,
+}
+
+/// Parameters for patching panel properties.
+#[derive(Debug, Deserialize)]
+pub struct PatchPanelParams {
+    pub id: String,
+    pub position: Option<Position>,
+    pub height: Option<u16>,
+    pub z: Option<i32>,
+    pub spans: Option<Vec<OverlaySpan>>,
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
 
@@ -422,6 +464,179 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 ),
             }
         }
+        "list_panels" => {
+            let panels = state.panels.list();
+            WsResponse::success(id, method, serde_json::to_value(&panels).unwrap())
+        }
+        "clear_panels" => {
+            state.panels.clear();
+            crate::panel::reconfigure_layout(
+                &state.panels,
+                &state.terminal_size,
+                &state.pty,
+                &state.parser,
+            )
+            .await;
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "create_panel" => {
+            let params: CreatePanelParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let panel_id = state
+                .panels
+                .create(params.position, params.height, params.z, params.spans);
+            crate::panel::reconfigure_layout(
+                &state.panels,
+                &state.terminal_size,
+                &state.pty,
+                &state.parser,
+            )
+            .await;
+            WsResponse::success(id, method, serde_json::json!({ "id": panel_id }))
+        }
+        "get_panel" => {
+            let params: PanelIdParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            match state.panels.get(&params.id) {
+                Some(panel) => WsResponse::success(
+                    id,
+                    method,
+                    serde_json::to_value(&panel).unwrap(),
+                ),
+                None => WsResponse::error(
+                    id,
+                    method,
+                    "panel_not_found",
+                    &format!("No panel exists with id '{}'.", params.id),
+                ),
+            }
+        }
+        "update_panel" => {
+            let params: UpdatePanelParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match state.panels.get(&params.id) {
+                Some(p) => p,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "panel_not_found",
+                        &format!("No panel exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if !state.panels.patch(
+                &params.id,
+                Some(params.position.clone()),
+                Some(params.height),
+                Some(params.z),
+                Some(params.spans),
+            ) {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "panel_not_found",
+                    &format!("No panel exists with id '{}'.", params.id),
+                );
+            }
+            let needs_reconfigure = old.position != params.position
+                || old.height != params.height
+                || old.z != params.z;
+            if needs_reconfigure {
+                crate::panel::reconfigure_layout(
+                    &state.panels,
+                    &state.terminal_size,
+                    &state.pty,
+                    &state.parser,
+                )
+                .await;
+            } else {
+                crate::panel::flush_panel_content(
+                    &state.panels,
+                    &params.id,
+                    &state.terminal_size,
+                );
+            }
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "patch_panel" => {
+            let params: PatchPanelParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let old = match state.panels.get(&params.id) {
+                Some(p) => p,
+                None => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "panel_not_found",
+                        &format!("No panel exists with id '{}'.", params.id),
+                    );
+                }
+            };
+            if !state.panels.patch(
+                &params.id,
+                params.position.clone(),
+                params.height,
+                params.z,
+                params.spans.clone(),
+            ) {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "panel_not_found",
+                    &format!("No panel exists with id '{}'.", params.id),
+                );
+            }
+            let needs_reconfigure = params.position.as_ref().is_some_and(|p| *p != old.position)
+                || params.height.is_some_and(|h| h != old.height)
+                || params.z.is_some_and(|z| z != old.z);
+            if needs_reconfigure {
+                crate::panel::reconfigure_layout(
+                    &state.panels,
+                    &state.terminal_size,
+                    &state.pty,
+                    &state.parser,
+                )
+                .await;
+            } else if params.spans.is_some() {
+                crate::panel::flush_panel_content(
+                    &state.panels,
+                    &params.id,
+                    &state.terminal_size,
+                );
+            }
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "delete_panel" => {
+            let params: PanelIdParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if !state.panels.delete(&params.id) {
+                return WsResponse::error(
+                    id,
+                    method,
+                    "panel_not_found",
+                    &format!("No panel exists with id '{}'.", params.id),
+                );
+            }
+            crate::panel::reconfigure_layout(
+                &state.panels,
+                &state.terminal_size,
+                &state.pty,
+                &state.parser,
+            )
+            .await;
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
         _ => WsResponse::error(
             id,
             method,
@@ -561,6 +776,9 @@ mod tests {
             overlays: OverlayStore::new(),
             input_mode: InputMode::new(),
             input_broadcaster: InputBroadcaster::new(),
+            panels: crate::panel::PanelStore::new(),
+            pty: std::sync::Arc::new(crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+            terminal_size: crate::terminal::TerminalSize::new(24, 80),
         };
         (state, input_rx)
     }
@@ -865,5 +1083,241 @@ mod tests {
         let resp = dispatch(&req, &state).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
+    }
+
+    // -----------------------------------------------------------------------
+    // Panel dispatch tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn dispatch_list_panels_empty() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "list_panels".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn dispatch_create_panel() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: Some(json!(1)),
+            method: "create_panel".to_string(),
+            params: Some(json!({
+                "position": "top",
+                "height": 2,
+                "spans": [{"text": "Status"}]
+            })),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"]["id"].is_string());
+        assert_eq!(json["id"], 1);
+        assert_eq!(state.panels.list().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_panel() {
+        let (state, _rx) = create_test_state();
+        let panel_id = state.panels.create(
+            crate::panel::Position::Top,
+            1,
+            None,
+            vec![crate::overlay::OverlaySpan {
+                text: "Test".to_string(),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            }],
+        );
+        let req = WsRequest {
+            id: None,
+            method: "get_panel".to_string(),
+            params: Some(json!({"id": panel_id})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["result"]["position"], "top");
+        assert_eq!(json["result"]["height"], 1);
+        assert_eq!(json["result"]["spans"][0]["text"], "Test");
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_panel_not_found() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "get_panel".to_string(),
+            params: Some(json!({"id": "nonexistent"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_panel() {
+        let (state, _rx) = create_test_state();
+        let panel_id = state.panels.create(
+            crate::panel::Position::Top,
+            1,
+            None,
+            vec![],
+        );
+        let panel = state.panels.get(&panel_id).unwrap();
+        let req = WsRequest {
+            id: None,
+            method: "update_panel".to_string(),
+            params: Some(json!({
+                "id": panel_id,
+                "position": "bottom",
+                "height": 3,
+                "z": panel.z,
+                "spans": [{"text": "Updated"}]
+            })),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let updated = state.panels.get(&panel_id).unwrap();
+        assert_eq!(updated.position, crate::panel::Position::Bottom);
+        assert_eq!(updated.height, 3);
+        assert_eq!(updated.spans[0].text, "Updated");
+    }
+
+    #[tokio::test]
+    async fn dispatch_update_panel_not_found() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "update_panel".to_string(),
+            params: Some(json!({
+                "id": "nonexistent",
+                "position": "top",
+                "height": 1,
+                "z": 0,
+                "spans": []
+            })),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_patch_panel() {
+        let (state, _rx) = create_test_state();
+        let panel_id = state.panels.create(
+            crate::panel::Position::Top,
+            1,
+            None,
+            vec![],
+        );
+        let req = WsRequest {
+            id: None,
+            method: "patch_panel".to_string(),
+            params: Some(json!({
+                "id": panel_id,
+                "height": 5
+            })),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        let patched = state.panels.get(&panel_id).unwrap();
+        assert_eq!(patched.height, 5);
+        assert_eq!(patched.position, crate::panel::Position::Top);
+    }
+
+    #[tokio::test]
+    async fn dispatch_patch_panel_not_found() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "patch_panel".to_string(),
+            params: Some(json!({"id": "nonexistent", "height": 2})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_panel() {
+        let (state, _rx) = create_test_state();
+        let panel_id = state.panels.create(
+            crate::panel::Position::Bottom,
+            2,
+            None,
+            vec![],
+        );
+        assert_eq!(state.panels.list().len(), 1);
+        let req = WsRequest {
+            id: None,
+            method: "delete_panel".to_string(),
+            params: Some(json!({"id": panel_id})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert!(state.panels.get(&panel_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_delete_panel_not_found() {
+        let (state, _rx) = create_test_state();
+        let req = WsRequest {
+            id: None,
+            method: "delete_panel".to_string(),
+            params: Some(json!({"id": "nonexistent"})),
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["error"]["code"], "panel_not_found");
+    }
+
+    #[tokio::test]
+    async fn dispatch_clear_panels() {
+        let (state, _rx) = create_test_state();
+        state.panels.create(crate::panel::Position::Top, 1, None, vec![]);
+        state.panels.create(crate::panel::Position::Bottom, 1, None, vec![]);
+        assert_eq!(state.panels.list().len(), 2);
+
+        let req = WsRequest {
+            id: None,
+            method: "clear_panels".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert_eq!(state.panels.list().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dispatch_list_panels_after_create() {
+        let (state, _rx) = create_test_state();
+        state.panels.create(
+            crate::panel::Position::Top,
+            1,
+            None,
+            vec![crate::overlay::OverlaySpan {
+                text: "A".to_string(),
+                fg: None, bg: None, bold: false, italic: false, underline: false,
+            }],
+        );
+        let req = WsRequest {
+            id: None,
+            method: "list_panels".to_string(),
+            params: None,
+        };
+        let resp = dispatch(&req, &state).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        let panels = json["result"].as_array().unwrap();
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0]["position"], "top");
     }
 }

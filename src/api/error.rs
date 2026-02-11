@@ -19,6 +19,8 @@ pub enum ApiError {
     NotFound,
     /// 404 - A specific overlay ID was not found.
     OverlayNotFound(String),
+    /// 404 - A specific panel ID was not found.
+    PanelNotFound(String),
     /// 400 - Malformed or invalid request.
     InvalidRequest(String),
     /// 400 - Invalid overlay specification.
@@ -45,6 +47,7 @@ impl ApiError {
             ApiError::AuthInvalid => StatusCode::FORBIDDEN,
             ApiError::NotFound => StatusCode::NOT_FOUND,
             ApiError::OverlayNotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::PanelNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::InvalidOverlay(_) => StatusCode::BAD_REQUEST,
             ApiError::InvalidInputMode(_) => StatusCode::BAD_REQUEST,
@@ -63,6 +66,7 @@ impl ApiError {
             ApiError::AuthInvalid => "auth_invalid",
             ApiError::NotFound => "not_found",
             ApiError::OverlayNotFound(_) => "overlay_not_found",
+            ApiError::PanelNotFound(_) => "panel_not_found",
             ApiError::InvalidRequest(_) => "invalid_request",
             ApiError::InvalidOverlay(_) => "invalid_overlay",
             ApiError::InvalidInputMode(_) => "invalid_input_mode",
@@ -83,6 +87,7 @@ impl ApiError {
             ApiError::AuthInvalid => "Invalid authentication token.".to_string(),
             ApiError::NotFound => "Not found.".to_string(),
             ApiError::OverlayNotFound(id) => format!("No overlay exists with id '{}'.", id),
+            ApiError::PanelNotFound(id) => format!("No panel exists with id '{}'.", id),
             ApiError::InvalidRequest(detail) => format!("Invalid request: {}.", detail),
             ApiError::InvalidOverlay(detail) => format!("Invalid overlay: {}.", detail),
             ApiError::InvalidInputMode(detail) => format!("Invalid input mode: {}.", detail),

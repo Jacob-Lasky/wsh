@@ -39,6 +39,9 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     (router(state, None), input_rx, broker.sender())
 }
@@ -118,6 +121,9 @@ async fn test_api_input_multiple_requests() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -194,6 +200,9 @@ async fn test_websocket_receives_pty_output() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -242,6 +251,9 @@ async fn test_websocket_sends_input_to_pty() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -286,6 +298,9 @@ async fn test_websocket_text_input_to_pty() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -329,6 +344,9 @@ async fn test_websocket_bidirectional_communication() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -391,6 +409,9 @@ async fn test_websocket_multiple_outputs() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -501,6 +522,9 @@ async fn test_websocket_line_event_includes_total_lines() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 
@@ -578,6 +602,9 @@ async fn test_scrollback_endpoint() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(5, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(5, 80),
     };
     let app = router(state, None);
 
@@ -631,6 +658,9 @@ async fn test_scrollback_initial_state() {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     };
     let app = router(state, None);
 

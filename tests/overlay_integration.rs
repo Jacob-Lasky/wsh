@@ -34,6 +34,9 @@ fn create_test_state() -> AppState {
         overlays: OverlayStore::new(),
         input_mode: InputMode::new(),
         input_broadcaster: InputBroadcaster::new(),
+        panels: wsh::panel::PanelStore::new(),
+        pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
+        terminal_size: wsh::terminal::TerminalSize::new(24, 80),
     }
 }
 

@@ -8,12 +8,16 @@ use axum::{
     Router,
 };
 use bytes::Bytes;
+use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::input::{InputBroadcaster, InputMode};
 use crate::overlay::OverlayStore;
+use crate::panel::PanelStore;
 use crate::parser::Parser;
+use crate::pty::Pty;
 use crate::shutdown::ShutdownCoordinator;
+use crate::terminal::TerminalSize;
 
 use handlers::*;
 
@@ -24,6 +28,9 @@ pub struct AppState {
     pub shutdown: ShutdownCoordinator,
     pub parser: Parser,
     pub overlays: OverlayStore,
+    pub panels: PanelStore,
+    pub pty: Arc<Pty>,
+    pub terminal_size: TerminalSize,
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
 }
@@ -50,6 +57,19 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .put(overlay_update)
                 .patch(overlay_patch)
                 .delete(overlay_delete),
+        )
+        .route(
+            "/panel",
+            get(panel_list)
+                .post(panel_create)
+                .delete(panel_clear),
+        )
+        .route(
+            "/panel/:id",
+            get(panel_get)
+                .put(panel_update)
+                .patch(panel_patch)
+                .delete(panel_delete),
         )
         .with_state(state);
 
@@ -86,12 +106,17 @@ mod tests {
         let (input_tx, input_rx) = mpsc::channel(64);
         let broker = Broker::new();
         let parser = Parser::spawn(&broker, 80, 24, 1000);
+        let pty = crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default())
+            .expect("failed to spawn PTY for test");
         let state = AppState {
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
             parser,
             overlays: OverlayStore::new(),
+            panels: crate::panel::PanelStore::new(),
+            pty: std::sync::Arc::new(pty),
+            terminal_size: crate::terminal::TerminalSize::new(24, 80),
             input_mode: InputMode::new(),
             input_broadcaster: crate::input::InputBroadcaster::new(),
         };
