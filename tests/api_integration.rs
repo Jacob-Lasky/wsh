@@ -42,6 +42,7 @@ fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     (router(state, None), input_rx, broker.sender())
 }
@@ -124,6 +125,7 @@ async fn test_api_input_multiple_requests() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -203,6 +205,7 @@ async fn test_websocket_receives_pty_output() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -254,6 +257,7 @@ async fn test_websocket_sends_input_to_pty() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -301,6 +305,7 @@ async fn test_websocket_text_input_to_pty() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -347,6 +352,7 @@ async fn test_websocket_bidirectional_communication() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -412,6 +418,7 @@ async fn test_websocket_multiple_outputs() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -525,6 +532,7 @@ async fn test_websocket_line_event_includes_total_lines() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -605,6 +613,7 @@ async fn test_scrollback_endpoint() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(5, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(5, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 
@@ -661,6 +670,7 @@ async fn test_scrollback_initial_state() {
         panels: wsh::panel::PanelStore::new(),
         pty: std::sync::Arc::new(wsh::pty::Pty::spawn(24, 80, wsh::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = router(state, None);
 

@@ -79,6 +79,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         panels: wsh::panel::PanelStore::new(),
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -204,6 +205,7 @@ async fn test_websocket_text_input_reaches_pty() {
         panels: wsh::panel::PanelStore::new(),
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

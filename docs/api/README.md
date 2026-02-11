@@ -32,6 +32,7 @@ endpoint, request format, and response shape you need to build against the API.
 | `GET` | `/input/mode` | Get current input mode |
 | `POST` | `/input/capture` | Switch to capture mode |
 | `POST` | `/input/release` | Switch to passthrough mode |
+| `GET` | `/quiesce` | Wait for terminal quiescence |
 | `GET` | `/openapi.yaml` | OpenAPI specification (no auth) |
 | `GET` | `/docs` | This documentation (no auth) |
 
@@ -248,6 +249,60 @@ See [input-capture.md](input-capture.md) for the full input capture documentatio
 
 Input capture lets API clients intercept keyboard input before it reaches the
 terminal's PTY. Useful for building custom key handlers and agent interactions.
+
+## Quiescence Sync
+
+```
+GET /quiesce?timeout_ms=2000
+```
+
+Long-polls until the terminal has been idle (no PTY output or input from any
+source) for `timeout_ms` milliseconds, then returns a full screen state
+snapshot. Useful for agents and automation that need to know when "the dust has
+settled" after sending a command.
+
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `format` | `plain` \| `styled` | `styled` | Line format for response |
+| `max_wait_ms` | integer | `30000` | Overall deadline before returning 408 |
+
+If the terminal has already been quiet for `timeout_ms` when the request
+arrives, it responds immediately.
+
+**Response (200):**
+
+```json
+{
+  "screen": { ... },
+  "scrollback_lines": 150
+}
+```
+
+The `screen` object has the same shape as `GET /screen`.
+
+**Errors:**
+
+| Status | Code | When |
+|--------|------|------|
+| 408 | `quiesce_timeout` | `max_wait_ms` exceeded without quiescence |
+
+**Example:**
+
+```bash
+# Send a command, then wait for it to finish
+curl -X POST http://localhost:8080/input -d $'ls\n'
+curl 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
+
+# Immediate response when terminal is already idle
+curl 'http://localhost:8080/quiesce?timeout_ms=500&format=plain'
+```
+
+The WebSocket equivalent is the `await_quiesce` method — see
+[websocket.md](websocket.md). Subscriptions can also include automatic
+quiescence sync via the `quiesce_ms` parameter.
 
 ## Authentication
 

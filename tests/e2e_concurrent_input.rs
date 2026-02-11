@@ -77,6 +77,7 @@ async fn test_concurrent_input_from_multiple_sources() {
         panels: wsh::panel::PanelStore::new(),
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -223,6 +224,7 @@ async fn test_rapid_http_requests() {
         panels: wsh::panel::PanelStore::new(),
         pty: pty.clone(),
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
+        activity: wsh::activity::ActivityTracker::new(),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

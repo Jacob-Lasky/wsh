@@ -45,6 +45,7 @@ pub(super) async fn input(
         tracing::error!("Failed to send input to PTY: {}", e);
         ApiError::InputSendFailed
     })?;
+    state.activity.touch();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -148,6 +149,18 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
     // Input subscription (lazily created when EventType::Input is subscribed)
     let mut input_rx: Option<tokio::sync::broadcast::Receiver<crate::input::InputEvent>> = None;
 
+    // Pending await_quiesce: (request_id, future resolving to true=quiescent/false=timeout)
+    let mut pending_quiesce: Option<(
+        Option<serde_json::Value>,
+        crate::parser::state::Format,
+        std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>,
+    )> = None;
+
+    // Quiescence subscription: background task signals through this channel
+    let mut quiesce_sub_rx: Option<tokio::sync::mpsc::Receiver<()>> = None;
+    let mut quiesce_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut quiesce_sub_format = crate::parser::state::Format::default();
+
     // Main event loop
     loop {
         tokio::select! {
@@ -205,6 +218,87 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                 }
             }
 
+            // Pending await_quiesce resolves
+            result = async {
+                match &mut pending_quiesce {
+                    Some((_, _, fut)) => fut.as_mut().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let (req_id, format, _) = pending_quiesce.take().unwrap();
+                if result {
+                    // Quiescent — query screen and return
+                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = state
+                        .parser
+                        .query(crate::parser::state::Query::Screen { format })
+                        .await
+                    {
+                        let scrollback_lines = screen.total_lines;
+                        let resp = super::ws_methods::WsResponse::success(
+                            req_id,
+                            "await_quiesce",
+                            serde_json::json!({
+                                "screen": screen,
+                                "scrollback_lines": scrollback_lines,
+                            }),
+                        );
+                        if let Ok(json) = serde_json::to_string(&resp) {
+                            if ws_tx.send(Message::Text(json)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Timeout
+                    let resp = super::ws_methods::WsResponse::error(
+                        req_id,
+                        "await_quiesce",
+                        "quiesce_timeout",
+                        "Terminal did not become quiescent within the deadline.",
+                    );
+                    if let Ok(json) = serde_json::to_string(&resp) {
+                        if ws_tx.send(Message::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Quiescence subscription fires
+            signal = async {
+                match &mut quiesce_sub_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match signal {
+                    Some(()) => {
+                        // Emit a sync event
+                        if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = state
+                            .parser
+                            .query(crate::parser::state::Query::Screen { format: quiesce_sub_format })
+                            .await
+                        {
+                            let scrollback_lines = screen.total_lines;
+                            let sync_event = crate::parser::events::Event::Sync {
+                                seq: 0,
+                                screen,
+                                scrollback_lines,
+                            };
+                            if let Ok(json) = serde_json::to_string(&sync_event) {
+                                if ws_tx.send(Message::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        // Channel closed, clear subscription
+                        quiesce_sub_rx = None;
+                    }
+                }
+            }
+
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -238,6 +332,36 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                                         }
                                     } else {
                                         input_rx = None;
+                                    }
+
+                                    // Set up quiescence subscription if requested
+                                    if let Some(handle) = quiesce_sub_handle.take() {
+                                        handle.abort();
+                                    }
+                                    quiesce_sub_rx = None;
+
+                                    if params.quiesce_ms > 0 {
+                                        let timeout = std::time::Duration::from_millis(params.quiesce_ms);
+                                        let activity = state.activity.clone();
+                                        let (tx, rx) = tokio::sync::mpsc::channel(1);
+                                        quiesce_sub_rx = Some(rx);
+                                        quiesce_sub_format = sub_format;
+
+                                        quiesce_sub_handle = Some(tokio::spawn(async move {
+                                            let mut watch_rx = activity.subscribe();
+                                            loop {
+                                                // Wait for activity
+                                                if watch_rx.changed().await.is_err() {
+                                                    break;
+                                                }
+                                                // Wait for quiescence
+                                                activity.wait_for_quiescence(timeout).await;
+                                                // Signal the main loop
+                                                if tx.send(()).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }));
                                     }
 
                                     // Send response
@@ -286,6 +410,44 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                                     }
                                 }
                             }
+                        } else if req.method == "await_quiesce" {
+                            // Handle await_quiesce specially (async wait)
+                            let params_value = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
+                            match serde_json::from_value::<super::ws_methods::AwaitQuiesceParams>(params_value) {
+                                Ok(params) => {
+                                    let timeout = std::time::Duration::from_millis(params.timeout_ms);
+                                    let format = params.format;
+                                    let activity = state.activity.clone();
+
+                                    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>> = if let Some(max_wait) = params.max_wait_ms {
+                                        let deadline = std::time::Duration::from_millis(max_wait);
+                                        Box::pin(async move {
+                                            tokio::time::timeout(deadline, activity.wait_for_quiescence(timeout))
+                                                .await
+                                                .is_ok()
+                                        })
+                                    } else {
+                                        Box::pin(async move {
+                                            activity.wait_for_quiescence(timeout).await;
+                                            true
+                                        })
+                                    };
+
+                                    // Replace any pending quiesce
+                                    pending_quiesce = Some((req.id.clone(), format, fut));
+                                }
+                                Err(e) => {
+                                    let resp = super::ws_methods::WsResponse::error(
+                                        req.id.clone(),
+                                        "await_quiesce",
+                                        "invalid_request",
+                                        &format!("Invalid await_quiesce params: {}.", e),
+                                    );
+                                    if let Ok(json) = serde_json::to_string(&resp) {
+                                        let _ = ws_tx.send(Message::Text(json)).await;
+                                    }
+                                }
+                            }
                         } else {
                             // Dispatch all other methods
                             let resp = super::ws_methods::dispatch(&req, &state).await;
@@ -313,6 +475,61 @@ async fn handle_ws_json(socket: WebSocket, state: AppState) {
                     break;
                 }
             }
+        }
+    }
+
+    // Clean up quiescence subscription task
+    if let Some(handle) = quiesce_sub_handle {
+        handle.abort();
+    }
+}
+
+// Quiescence query parameters
+#[derive(Deserialize)]
+pub(super) struct QuiesceQuery {
+    timeout_ms: u64,
+    #[serde(default)]
+    format: Format,
+    #[serde(default = "default_max_wait")]
+    max_wait_ms: u64,
+}
+
+fn default_max_wait() -> u64 {
+    30_000
+}
+
+pub(super) async fn quiesce(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<QuiesceQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let timeout = std::time::Duration::from_millis(params.timeout_ms);
+    let deadline = std::time::Duration::from_millis(params.max_wait_ms);
+
+    let quiesce_fut = state.activity.wait_for_quiescence(timeout);
+
+    match tokio::time::timeout(deadline, quiesce_fut).await {
+        Ok(()) => {
+            // Quiescent — query screen state
+            let response = state
+                .parser
+                .query(Query::Screen { format: params.format })
+                .await
+                .map_err(|_| ApiError::ParserUnavailable)?;
+
+            match response {
+                crate::parser::state::QueryResponse::Screen(screen) => {
+                    let scrollback_lines = screen.total_lines;
+                    Ok(Json(serde_json::json!({
+                        "screen": screen,
+                        "scrollback_lines": scrollback_lines,
+                    })))
+                }
+                _ => Err(ApiError::ParserUnavailable),
+            }
+        }
+        Err(_) => {
+            // Deadline exceeded
+            Err(ApiError::QuiesceTimeout)
         }
     }
 }

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use wsh::{api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, panel::{self, PanelStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
+use wsh::{activity::ActivityTracker, api, broker, input::{self, InputBroadcaster, InputMode}, overlay::{self, OverlayStore}, panel::{self, PanelStore}, parser::Parser, pty::{self, SpawnCommand}, shutdown::ShutdownCoordinator, terminal};
 
 /// wsh - The Web Shell
 ///
@@ -171,10 +171,13 @@ async fn main() -> Result<(), WshError> {
     // Create input_broadcaster before AppState so it can be shared with stdin reader
     let input_broadcaster = InputBroadcaster::new();
 
+    // Create activity tracker for quiescence detection
+    let activity = ActivityTracker::new();
+
     // Spawn I/O tasks
-    let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone(), overlays.clone());
+    let pty_reader_handle = spawn_pty_reader(pty_reader, broker.clone(), overlays.clone(), activity.clone());
     spawn_pty_writer(pty_writer, input_rx);
-    spawn_stdin_reader(input_tx.clone(), input_mode.clone(), input_broadcaster.clone());
+    spawn_stdin_reader(input_tx.clone(), input_mode.clone(), input_broadcaster.clone(), activity.clone());
 
     // Start API server with graceful shutdown support
     let state = api::AppState {
@@ -188,6 +191,7 @@ async fn main() -> Result<(), WshError> {
         terminal_size: terminal_size.clone(),
         input_mode: input_mode.clone(),
         input_broadcaster: input_broadcaster.clone(),
+        activity: activity.clone(),
     };
     let app = api::router(state, token);
     tracing::info!(addr = %args.bind, "API server listening");
@@ -270,6 +274,7 @@ fn spawn_pty_reader(
     mut reader: Box<dyn Read + Send>,
     broker: broker::Broker,
     overlays: overlay::OverlayStore,
+    activity: ActivityTracker,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
         let mut stdout = std::io::stdout();
@@ -301,6 +306,7 @@ fn spawn_pty_reader(
 
                     let _ = stdout.flush();
                     broker.publish(data);
+                    activity.touch();
                 }
                 Err(e) => {
                     tracing::debug!(?e, "PTY reader: error");
@@ -335,6 +341,7 @@ fn spawn_stdin_reader(
     input_tx: mpsc::Sender<Bytes>,
     input_mode: input::InputMode,
     input_broadcaster: input::InputBroadcaster,
+    activity: ActivityTracker,
 ) {
     tokio::task::spawn_blocking(move || {
         let mut stdin = std::io::stdin();
@@ -351,6 +358,9 @@ fn spawn_stdin_reader(
 
                     // Always broadcast input first
                     input_broadcaster.broadcast_input(data, mode);
+
+                    // Any input resets the quiescence timer
+                    activity.touch();
 
                     // Check for Ctrl+\ escape hatch in capture mode
                     if input::is_ctrl_backslash(data) && mode == input::Mode::Capture {

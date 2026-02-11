@@ -11,6 +11,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 
+use crate::activity::ActivityTracker;
 use crate::input::{InputBroadcaster, InputMode};
 use crate::overlay::OverlayStore;
 use crate::panel::PanelStore;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub terminal_size: TerminalSize,
     pub input_mode: InputMode,
     pub input_broadcaster: InputBroadcaster,
+    pub activity: ActivityTracker,
 }
 
 pub fn router(state: AppState, token: Option<String>) -> Router {
@@ -41,6 +43,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/input/mode", get(input_mode_get))
         .route("/input/capture", post(input_capture))
         .route("/input/release", post(input_release))
+        .route("/quiesce", get(quiesce))
         .route("/ws/raw", get(ws_raw))
         .route("/ws/json", get(ws_json))
         .route("/screen", get(screen))
@@ -119,6 +122,7 @@ mod tests {
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             input_mode: InputMode::new(),
             input_broadcaster: crate::input::InputBroadcaster::new(),
+            activity: ActivityTracker::new(),
         };
         (state, input_rx)
     }

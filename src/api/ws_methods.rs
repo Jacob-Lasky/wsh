@@ -98,6 +98,19 @@ pub struct SubscribeParams {
     pub interval_ms: u64,
     #[serde(default)]
     pub format: Format,
+    /// When > 0, the server will emit a `sync` event whenever the terminal has
+    /// been idle for this many milliseconds after any activity.
+    #[serde(default)]
+    pub quiesce_ms: u64,
+}
+
+/// Parameters for the `await_quiesce` WebSocket method.
+#[derive(Debug, Deserialize)]
+pub struct AwaitQuiesceParams {
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub format: Format,
+    pub max_wait_ms: Option<u64>,
 }
 
 fn default_interval() -> u64 {
@@ -455,7 +468,10 @@ pub async fn dispatch(req: &WsRequest, state: &AppState) -> WsResponse {
                 }
             };
             match state.input_tx.send(bytes).await {
-                Ok(()) => WsResponse::success(id, method, serde_json::json!({})),
+                Ok(()) => {
+                    state.activity.touch();
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
                 Err(_) => WsResponse::error(
                     id,
                     method,
@@ -779,6 +795,7 @@ mod tests {
             panels: crate::panel::PanelStore::new(),
             pty: std::sync::Arc::new(crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default()).expect("failed to spawn PTY for test")),
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
+            activity: crate::activity::ActivityTracker::new(),
         };
         (state, input_rx)
     }

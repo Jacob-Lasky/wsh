@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod api;
 pub mod broker;
 pub mod input;

@@ -36,6 +36,7 @@ fn create_test_state_with_size(rows: u16, cols: u16) -> AppState {
                 .expect("failed to spawn PTY for test"),
         ),
         terminal_size: wsh::terminal::TerminalSize::new(rows, cols),
+        activity: wsh::activity::ActivityTracker::new(),
     }
 }
 

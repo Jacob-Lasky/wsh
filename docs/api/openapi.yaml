@@ -474,6 +474,54 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /quiesce:
+    get:
+      operationId: getQuiesce
+      summary: Wait for terminal quiescence
+      tags: [terminal]
+      description: >
+        Long-polls until the terminal has been idle for timeout_ms milliseconds,
+        then returns a full screen state snapshot. Returns 408 if max_wait_ms
+        is exceeded without quiescence.
+      parameters:
+        - name: timeout_ms
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: Quiescence threshold in milliseconds
+        - name: format
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Format"
+        - name: max_wait_ms
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 30000
+          description: Overall deadline in milliseconds
+      responses:
+        "200":
+          description: Terminal is quiescent. Returns screen state snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuiesceResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "408":
+          description: Deadline exceeded without quiescence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /input/mode:
     get:
       operationId: getInputMode
@@ -858,6 +906,13 @@ components:
         events: { type: array, items: { $ref: "#/components/schemas/EventType" } }
         interval_ms: { type: integer, minimum: 0, default: 100 }
         format: { $ref: "#/components/schemas/Format" }
+        quiesce_ms:
+          type: integer
+          minimum: 0
+          default: 0
+          description: >
+            When > 0, emit a sync event after this many ms of terminal
+            inactivity following any activity. 0 = disabled.
 
     SendInputParams:
       type: object
@@ -874,6 +929,27 @@ components:
             Encoding of the data field. With utf8 (default), JSON unicode
             escapes handle control characters. With base64, data is decoded
             before sending to the PTY.
+
+    AwaitQuiesceParams:
+      type: object
+      required: [timeout_ms]
+      properties:
+        timeout_ms:
+          type: integer
+          minimum: 1
+          description: Quiescence threshold in milliseconds
+        format: { $ref: "#/components/schemas/Format" }
+        max_wait_ms:
+          type: integer
+          minimum: 1
+          description: Overall deadline in milliseconds (omit for no deadline)
+
+    QuiesceResponse:
+      type: object
+      required: [screen, scrollback_lines]
+      properties:
+        screen: { $ref: "#/components/schemas/ScreenResponse" }
+        scrollback_lines: { type: integer, minimum: 0 }
 
     EventType:
       type: string
@@ -1030,5 +1106,6 @@ components:
                 - channel_full
                 - parser_unavailable
                 - input_send_failed
+                - quiesce_timeout
                 - internal_error
             message: { type: string }

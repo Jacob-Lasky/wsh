@@ -130,6 +130,7 @@ Response:
 | `events` | array of strings | (required) | Event types to subscribe to |
 | `interval_ms` | integer | `100` | Minimum interval between events (ms) |
 | `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for events containing lines |
+| `quiesce_ms` | integer | `0` | When > 0, emit a `sync` event after this many ms of inactivity |
 
 **Available event types:**
 
@@ -241,6 +242,54 @@ instead of being sent to the PTY.
 Switch back to passthrough mode. Keyboard input goes to the PTY normally.
 
 **Result:** `{}`
+
+### `await_quiesce`
+
+Wait for the terminal to become quiescent (no activity for the specified
+duration), then return a screen state snapshot. The connection remains
+responsive while waiting — other events and method calls continue normally.
+
+**Params:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_ms` | integer | (required) | Quiescence threshold in milliseconds |
+| `format` | `"plain"` \| `"styled"` | `"styled"` | Line format for screen snapshot |
+| `max_wait_ms` | integer | (none) | Overall deadline; omit for no deadline |
+
+**Result:**
+
+```json
+{"screen": { ... }, "scrollback_lines": 150}
+```
+
+**Error (on timeout):**
+
+```json
+{"error": {"code": "quiesce_timeout", "message": "Terminal did not become quiescent within the deadline."}}
+```
+
+A new `await_quiesce` request replaces any pending one. Only one can be active
+at a time per connection.
+
+### Quiescence Sync Subscription
+
+When `quiesce_ms > 0` is passed to `subscribe`, the server automatically emits
+a `sync` event whenever the terminal has been idle for that duration after any
+activity. This provides a continuous "command finished" signal without polling.
+
+```json
+{"method": "subscribe", "params": {"events": ["lines"], "quiesce_ms": 2000}}
+```
+
+Each time the terminal goes quiet for 2 seconds, you receive:
+
+```json
+{"event": "sync", "seq": 0, "screen": { ... }, "scrollback_lines": 150}
+```
+
+The quiescence subscription is reset on re-subscribe. Set `quiesce_ms` to `0`
+(or omit it) to disable.
 
 ### `create_overlay`
 

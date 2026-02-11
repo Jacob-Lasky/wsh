@@ -35,6 +35,8 @@ pub enum ApiError {
     ParserUnavailable,
     /// 500 - Failed to write input to the PTY.
     InputSendFailed,
+    /// 408 - Quiescence wait exceeded max_wait_ms deadline.
+    QuiesceTimeout,
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -55,6 +57,7 @@ impl ApiError {
             ApiError::ChannelFull => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::ParserUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::InputSendFailed => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::QuiesceTimeout => StatusCode::REQUEST_TIMEOUT,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -74,6 +77,7 @@ impl ApiError {
             ApiError::ChannelFull => "channel_full",
             ApiError::ParserUnavailable => "parser_unavailable",
             ApiError::InputSendFailed => "input_send_failed",
+            ApiError::QuiesceTimeout => "quiesce_timeout",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -95,6 +99,9 @@ impl ApiError {
             ApiError::ChannelFull => "Server is overloaded. Try again shortly.".to_string(),
             ApiError::ParserUnavailable => "Terminal parser is unavailable.".to_string(),
             ApiError::InputSendFailed => "Failed to send input to terminal.".to_string(),
+            ApiError::QuiesceTimeout => {
+                "Terminal did not become quiescent within the deadline.".to_string()
+            }
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }
     }
