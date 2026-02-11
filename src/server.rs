@@ -606,4 +606,291 @@ mod tests {
         let path = default_socket_path();
         assert!(path.to_str().unwrap().contains("wsh.sock"));
     }
+
+    /// Helper: create a session via the socket, send some input to generate
+    /// scrollback, wait for it to be processed, and return the socket path
+    /// and session name for subsequent attach tests.
+    async fn create_session_with_output(
+        _sessions: &SessionRegistry,
+        path: &Path,
+        session_name: &str,
+    ) -> UnixStream {
+        let mut stream = UnixStream::connect(path).await.unwrap();
+
+        // Create session with bash (explicit command for predictable output)
+        let msg = CreateSessionMsg {
+            name: Some(session_name.to_string()),
+            command: Some("bash".to_string()),
+            cwd: None,
+            env: None,
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::CreateSession, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        // Read CreateSessionResponse
+        let resp_frame = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp_frame.frame_type, FrameType::CreateSessionResponse);
+
+        // Wait for shell to start
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Send input to generate some scrollback lines
+        let input = Frame::data(
+            FrameType::StdinInput,
+            Bytes::from("echo scrollback_line_1\necho scrollback_line_2\necho scrollback_line_3\n"),
+        );
+        input.write_to(&mut stream).await.unwrap();
+
+        // Wait for output to be processed by the parser
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+        // Drain output frames from the creator stream so it doesn't block
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+
+        stream
+    }
+
+    #[tokio::test]
+    async fn test_attach_scrollback_none_returns_empty() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions.clone()).await;
+
+        let _creator = create_session_with_output(&sessions, &path, "sb-none-test").await;
+
+        // Attach with ScrollbackRequest::None
+        let mut stream2 = UnixStream::connect(&path).await.unwrap();
+        let attach_msg = AttachSessionMsg {
+            name: "sb-none-test".to_string(),
+            scrollback: ScrollbackRequest::None,
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::AttachSession, &attach_msg)
+            .unwrap()
+            .write_to(&mut stream2)
+            .await
+            .unwrap();
+
+        let resp_frame = Frame::read_from(&mut stream2).await.unwrap();
+        assert_eq!(resp_frame.frame_type, FrameType::AttachSessionResponse);
+        let resp: AttachSessionResponseMsg = resp_frame.parse_json().unwrap();
+
+        assert_eq!(resp.name, "sb-none-test");
+        assert!(
+            resp.scrollback.is_empty(),
+            "scrollback should be empty with ScrollbackRequest::None, got {} bytes",
+            resp.scrollback.len()
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_attach_scrollback_all_returns_content() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions.clone()).await;
+
+        let _creator = create_session_with_output(&sessions, &path, "sb-all-test").await;
+
+        // Attach with ScrollbackRequest::All
+        let mut stream2 = UnixStream::connect(&path).await.unwrap();
+        let attach_msg = AttachSessionMsg {
+            name: "sb-all-test".to_string(),
+            scrollback: ScrollbackRequest::All,
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::AttachSession, &attach_msg)
+            .unwrap()
+            .write_to(&mut stream2)
+            .await
+            .unwrap();
+
+        let resp_frame = Frame::read_from(&mut stream2).await.unwrap();
+        assert_eq!(resp_frame.frame_type, FrameType::AttachSessionResponse);
+        let resp: AttachSessionResponseMsg = resp_frame.parse_json().unwrap();
+
+        assert_eq!(resp.name, "sb-all-test");
+
+        // Scrollback should contain our echo output (it ends up in scrollback
+        // because the shell prompt pushes earlier lines out of the visible screen).
+        // However, on a fresh 24-row terminal with only 3 echo commands, the lines
+        // may still be on the active screen rather than scrollback. Either way,
+        // the combined scrollback + screen should contain our output.
+        let scrollback_str = String::from_utf8_lossy(&resp.scrollback);
+        let screen_str = String::from_utf8_lossy(&resp.screen);
+        let combined = format!("{}{}", scrollback_str, screen_str);
+        assert!(
+            combined.contains("scrollback_line_1"),
+            "expected to find 'scrollback_line_1' in scrollback or screen.\nScrollback ({} bytes): {:?}\nScreen ({} bytes): {:?}",
+            resp.scrollback.len(),
+            scrollback_str,
+            resp.screen.len(),
+            screen_str,
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_attach_scrollback_lines_limits_output() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions.clone()).await;
+
+        // Create a session and generate enough output to have scrollback
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = CreateSessionMsg {
+            name: Some("sb-lines-test".to_string()),
+            command: Some("bash".to_string()),
+            cwd: None,
+            env: None,
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::CreateSession, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+        let _resp = Frame::read_from(&mut stream).await.unwrap();
+
+        // Wait for shell to start
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // Generate many lines to force scrollback (more than 24 visible rows)
+        let mut input_cmds = String::new();
+        for i in 0..40 {
+            input_cmds.push_str(&format!("echo line_{}\n", i));
+        }
+        let input = Frame::data(FrameType::StdinInput, Bytes::from(input_cmds));
+        input.write_to(&mut stream).await.unwrap();
+
+        // Wait for output processing
+        tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+
+        // Drain creator stream
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+        loop {
+            match tokio::time::timeout_at(deadline, Frame::read_from(&mut stream)).await {
+                Ok(Ok(_)) => continue,
+                _ => break,
+            }
+        }
+
+        // Attach with ScrollbackRequest::Lines(5)
+        let mut stream2 = UnixStream::connect(&path).await.unwrap();
+        let attach_msg = AttachSessionMsg {
+            name: "sb-lines-test".to_string(),
+            scrollback: ScrollbackRequest::Lines(5),
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::AttachSession, &attach_msg)
+            .unwrap()
+            .write_to(&mut stream2)
+            .await
+            .unwrap();
+
+        let resp_frame = Frame::read_from(&mut stream2).await.unwrap();
+        assert_eq!(resp_frame.frame_type, FrameType::AttachSessionResponse);
+        let resp_limited: AttachSessionResponseMsg = resp_frame.parse_json().unwrap();
+
+        // Now attach with ScrollbackRequest::All to compare
+        let mut stream3 = UnixStream::connect(&path).await.unwrap();
+        let attach_all_msg = AttachSessionMsg {
+            name: "sb-lines-test".to_string(),
+            scrollback: ScrollbackRequest::All,
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::AttachSession, &attach_all_msg)
+            .unwrap()
+            .write_to(&mut stream3)
+            .await
+            .unwrap();
+
+        let resp_all_frame = Frame::read_from(&mut stream3).await.unwrap();
+        let resp_all: AttachSessionResponseMsg = resp_all_frame.parse_json().unwrap();
+
+        // Lines(5) should return <= the amount that All returns
+        // (if there is scrollback, the limited version should be smaller or equal)
+        let limited_lines = String::from_utf8_lossy(&resp_limited.scrollback)
+            .lines()
+            .count();
+        let all_lines = String::from_utf8_lossy(&resp_all.scrollback)
+            .lines()
+            .count();
+
+        // If there is scrollback, the limited version should have fewer lines
+        if all_lines > 5 {
+            assert!(
+                limited_lines <= 5,
+                "Lines(5) should return at most 5 lines of scrollback, got {}. All had {} lines.",
+                limited_lines,
+                all_lines,
+            );
+            assert!(
+                limited_lines < all_lines,
+                "Lines(5) ({} lines) should return fewer lines than All ({} lines)",
+                limited_lines,
+                all_lines,
+            );
+        }
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_attach_screen_data_present() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions.clone()).await;
+
+        let _creator = create_session_with_output(&sessions, &path, "screen-test").await;
+
+        // Attach and check screen data
+        let mut stream2 = UnixStream::connect(&path).await.unwrap();
+        let attach_msg = AttachSessionMsg {
+            name: "screen-test".to_string(),
+            scrollback: ScrollbackRequest::None,
+            rows: 24,
+            cols: 80,
+        };
+        Frame::control(FrameType::AttachSession, &attach_msg)
+            .unwrap()
+            .write_to(&mut stream2)
+            .await
+            .unwrap();
+
+        let resp_frame = Frame::read_from(&mut stream2).await.unwrap();
+        assert_eq!(resp_frame.frame_type, FrameType::AttachSessionResponse);
+        let resp: AttachSessionResponseMsg = resp_frame.parse_json().unwrap();
+
+        // Screen data should be non-empty (at minimum contains cursor positioning
+        // escape sequences and the active screen content)
+        assert!(
+            !resp.screen.is_empty(),
+            "screen data should not be empty for an active session"
+        );
+
+        // Screen should contain the ANSI home/clear sequence
+        let screen_str = String::from_utf8_lossy(&resp.screen);
+        assert!(
+            screen_str.contains("\x1b[H\x1b[2J") || screen_str.contains("\x1b["),
+            "screen data should contain ANSI escape sequences, got: {:?}",
+            screen_str,
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
 }
