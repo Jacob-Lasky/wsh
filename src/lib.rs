@@ -6,5 +6,6 @@ pub mod overlay;
 pub mod panel;
 pub mod parser;
 pub mod pty;
+pub mod session;
 pub mod shutdown;
 pub mod terminal;
