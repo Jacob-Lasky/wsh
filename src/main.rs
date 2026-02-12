@@ -111,6 +111,16 @@ enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Detach all clients from a session (session stays alive)
+    Detach {
+        /// Session name to detach
+        name: String,
+
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+
     /// Upgrade a running server to persistent mode (it won't shut down when sessions end)
     Persist {
         /// Address of the HTTP/WebSocket API server
@@ -179,6 +189,9 @@ async fn main() -> Result<(), WshError> {
         }
         Some(Commands::Kill { name, socket }) => {
             run_kill(name, socket).await
+        }
+        Some(Commands::Detach { name, socket }) => {
+            run_detach(name, socket).await
         }
         Some(Commands::Persist { bind, token }) => {
             run_persist(bind, token).await
@@ -581,6 +594,29 @@ async fn run_kill(name: String, socket: Option<PathBuf>) -> Result<(), WshError>
     }
 
     println!("Session '{}' killed.", name);
+    Ok(())
+}
+
+async fn run_detach(name: String, socket: Option<PathBuf>) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "wsh detach: failed to connect to server at {}: {}",
+                socket_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = c.detach_session(&name).await {
+        eprintln!("wsh detach: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("Session '{}' detached.", name);
     Ok(())
 }
 

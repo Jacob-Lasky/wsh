@@ -38,9 +38,19 @@ pub struct Session {
     /// Only the standalone-mode session should have this set to `true`.
     /// Controls whether overlay/panel ANSI escape sequences are written to stdout.
     pub is_local: bool,
+    /// Signal to detach all streaming clients from this session.
+    /// Subscribers receive `()` when `detach()` is called; the session stays alive.
+    pub detach_signal: broadcast::Sender<()>,
 }
 
 impl Session {
+    /// Signal all attached streaming clients to detach.
+    ///
+    /// The session remains alive — only the streaming connections are closed.
+    pub fn detach(&self) {
+        let _ = self.detach_signal.send(());
+    }
+
     /// Spawn a new session with a PTY and all associated I/O tasks.
     ///
     /// The PTY reader only publishes to the broker (no stdout -- server mode).
@@ -156,6 +166,7 @@ impl Session {
                 input_broadcaster,
                 activity,
                 is_local: false,
+                detach_signal: broadcast::channel::<()>(1).0,
             },
             child_exit_rx,
         ))
@@ -361,6 +372,7 @@ mod tests {
             input_broadcaster: InputBroadcaster::new(),
             activity: ActivityTracker::new(),
             is_local: false,
+            detach_signal: broadcast::channel::<()>(1).0,
         };
         (session, input_rx)
     }
@@ -661,5 +673,21 @@ mod tests {
             output.contains("hello_wsh"),
             "expected output to contain 'hello_wsh', got: {output}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_detach_signal_notifies_subscribers() {
+        let (session, _rx) = create_test_session("detach-test");
+        let mut detach_rx = session.detach_signal.subscribe();
+
+        session.detach();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            detach_rx.recv(),
+        )
+        .await;
+        assert!(result.is_ok(), "detach signal should be received");
+        assert!(result.unwrap().is_ok(), "detach signal should not be an error");
     }
 }

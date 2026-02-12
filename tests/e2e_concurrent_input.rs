@@ -80,6 +80,7 @@ async fn test_concurrent_input_from_multiple_sources() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -236,6 +237,7 @@ async fn test_rapid_http_requests() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

@@ -106,6 +106,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
                 .patch(session_rename)
                 .delete(session_kill),
         )
+        .route("/sessions/:name/detach", post(session_detach))
         .route("/server/persist", post(server_persist))
         .route("/ws/json", get(ws_json_server));
 
@@ -168,6 +169,7 @@ mod tests {
             input_broadcaster: crate::input::InputBroadcaster::new(),
             activity: ActivityTracker::new(),
             is_local: false,
+            detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         };
         let registry = crate::session::SessionRegistry::new();
         registry.insert(Some("test".into()), session).unwrap();

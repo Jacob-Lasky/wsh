@@ -45,6 +45,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         input_broadcaster: InputBroadcaster::new(),
         activity: activity.clone(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

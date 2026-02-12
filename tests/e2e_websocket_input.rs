@@ -82,6 +82,7 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -217,6 +218,7 @@ async fn test_websocket_text_input_reaches_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

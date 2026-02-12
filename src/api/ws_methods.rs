@@ -824,6 +824,7 @@ mod tests {
             terminal_size: crate::terminal::TerminalSize::new(24, 80),
             activity: crate::activity::ActivityTracker::new(),
             is_local: false,
+            detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
         };
         (session, input_rx)
     }

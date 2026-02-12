@@ -25,6 +25,8 @@ pub enum FrameType {
     ListSessionsResponse = 0x09,
     KillSession = 0x0A,
     KillSessionResponse = 0x0B,
+    DetachSession = 0x0C,
+    DetachSessionResponse = 0x0D,
 
     // Data frames (raw bytes payload)
     PtyOutput = 0x10,
@@ -45,6 +47,8 @@ impl FrameType {
             0x09 => Some(Self::ListSessionsResponse),
             0x0A => Some(Self::KillSession),
             0x0B => Some(Self::KillSessionResponse),
+            0x0C => Some(Self::DetachSession),
+            0x0D => Some(Self::DetachSessionResponse),
             0x10 => Some(Self::PtyOutput),
             0x11 => Some(Self::StdinInput),
             _ => None,
@@ -267,6 +271,18 @@ pub struct KillSessionResponseMsg {
     pub name: String,
 }
 
+/// Client → Server: request to detach (signal) a session without destroying it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetachSessionMsg {
+    pub name: String,
+}
+
+/// Server → Client: confirmation that a session was detached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetachSessionResponseMsg {
+    pub name: String,
+}
+
 /// Serde helper for base64-encoded byte vectors in JSON.
 mod base64_bytes {
     use base64::Engine;
@@ -303,6 +319,8 @@ mod tests {
             FrameType::ListSessionsResponse,
             FrameType::KillSession,
             FrameType::KillSessionResponse,
+            FrameType::DetachSession,
+            FrameType::DetachSessionResponse,
             FrameType::PtyOutput,
             FrameType::StdinInput,
         ];
@@ -317,7 +335,7 @@ mod tests {
     fn frame_type_invalid_byte() {
         assert!(FrameType::from_u8(0xFF).is_none());
         assert!(FrameType::from_u8(0x00).is_none());
-        assert!(FrameType::from_u8(0x0C).is_none());
+        assert!(FrameType::from_u8(0x0E).is_none());
     }
 
     #[test]
@@ -540,6 +558,22 @@ mod tests {
         let frame = Frame::control(FrameType::KillSessionResponse, &msg).unwrap();
         let decoded: KillSessionResponseMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.name, "killed-session");
+    }
+
+    #[test]
+    fn control_frame_detach_session() {
+        let msg = DetachSessionMsg { name: "my-session".to_string() };
+        let frame = Frame::control(FrameType::DetachSession, &msg).unwrap();
+        let decoded: DetachSessionMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.name, "my-session");
+    }
+
+    #[test]
+    fn control_frame_detach_session_response() {
+        let msg = DetachSessionResponseMsg { name: "detached-session".to_string() };
+        let frame = Frame::control(FrameType::DetachSessionResponse, &msg).unwrap();
+        let decoded: DetachSessionResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.name, "detached-session");
     }
 
     #[tokio::test]

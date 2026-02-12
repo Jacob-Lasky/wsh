@@ -47,6 +47,7 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         terminal_size: TerminalSize::new(rows, cols),
         activity: ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     TestSession {
         session,

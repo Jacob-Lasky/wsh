@@ -5,6 +5,7 @@
 //! then enters a streaming loop forwarding I/O between the client's terminal
 //! and the server-managed PTY session.
 
+use bytes::Bytes;
 use std::io;
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -115,11 +116,17 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             })?;
             handle_kill_session(&mut stream, sessions, msg).await
         }
+        FrameType::DetachSession => {
+            let msg: DetachSessionMsg = frame.parse_json().map_err(|e| {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            })?;
+            handle_detach_session(&mut stream, sessions, msg).await
+        }
         other => {
             let err = ErrorMsg {
                 code: "invalid_initial_frame".to_string(),
                 message: format!(
-                    "expected CreateSession, AttachSession, ListSessions, or KillSession, got {:?}",
+                    "expected CreateSession, AttachSession, ListSessions, KillSession, or DetachSession, got {:?}",
                     other
                 ),
             };
@@ -329,6 +336,38 @@ async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
     }
 }
 
+/// Handle a DetachSession request: signal the session to detach attached clients.
+async fn handle_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    sessions: SessionRegistry,
+    msg: DetachSessionMsg,
+) -> io::Result<()> {
+    match sessions.get(&msg.name) {
+        Some(session) => {
+            session.detach();
+            tracing::info!(session = %msg.name, "session detached via socket");
+            let resp = DetachSessionResponseMsg { name: msg.name };
+            let resp_frame = Frame::control(FrameType::DetachSessionResponse, &resp)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            resp_frame.write_to(stream).await?;
+            Ok(())
+        }
+        None => {
+            let err = ErrorMsg {
+                code: "session_not_found".to_string(),
+                message: format!("session not found: {}", msg.name),
+            };
+            let err_frame = Frame::control(FrameType::Error, &err)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            err_frame.write_to(stream).await?;
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("session not found: {}", msg.name),
+            ))
+        }
+    }
+}
+
 /// Main streaming loop: proxy I/O between the client and the session.
 ///
 /// - Client → Server: StdinInput frames are forwarded to session.input_tx
@@ -349,10 +388,18 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     let parser = session.parser.clone();
     let activity = session.activity.clone();
     let terminal_size = session.terminal_size.clone();
+    let mut detach_rx = session.detach_signal.subscribe();
 
     // Main loop: read from client and session output concurrently
     loop {
         tokio::select! {
+            // Remote detach signal → send Detach frame to client and break
+            _ = detach_rx.recv() => {
+                let detach_frame = Frame::new(FrameType::Detach, Bytes::new());
+                let _ = detach_frame.write_to(&mut writer).await;
+                break;
+            }
+
             // Output from session → client
             result = output_rx.recv() => {
                 match result {

@@ -918,6 +918,53 @@ async fn handle_server_ws_request(
             }
         }
 
+        "detach_session" => {
+            #[derive(Deserialize)]
+            struct DetachParams {
+                name: String,
+            }
+            let params: DetachParams = match &req.params {
+                Some(v) => match serde_json::from_value(v.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Some(super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "invalid_request",
+                            &format!("Invalid params: {}.", e),
+                        ));
+                    }
+                },
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "invalid_request",
+                        "Missing 'params' with 'name' field.",
+                    ));
+                }
+            };
+
+            match state.sessions.get(&params.name) {
+                Some(session) => {
+                    session.detach();
+                    return Some(super::ws_methods::WsResponse::success(
+                        id,
+                        method,
+                        serde_json::json!({}),
+                    ));
+                }
+                None => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_not_found",
+                        &format!("Session not found: {}.", params.name),
+                    ));
+                }
+            }
+        }
+
         "rename_session" => {
             #[derive(Deserialize)]
             struct RenameParams {
@@ -1670,6 +1717,18 @@ pub(super) async fn session_kill(
         .sessions
         .remove(&name)
         .ok_or_else(|| ApiError::SessionNotFound(name))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn session_detach(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let session = state
+        .sessions
+        .get(&name)
+        .ok_or_else(|| ApiError::SessionNotFound(name))?;
+    session.detach();
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -35,6 +35,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -180,6 +181,7 @@ async fn test_ws_subscribe_then_events() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -304,6 +306,7 @@ async fn test_ws_methods_interleaved_with_events() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();

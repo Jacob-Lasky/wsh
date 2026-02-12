@@ -146,6 +146,35 @@ impl Client {
         }
     }
 
+    /// Detach all attached clients from a session via the server's Unix socket.
+    ///
+    /// Unlike `kill_session`, this keeps the session alive — it only disconnects
+    /// any streaming clients currently attached.
+    pub async fn detach_session(&mut self, name: &str) -> io::Result<()> {
+        let msg = DetachSessionMsg { name: name.to_string() };
+        let frame = Frame::control(FrameType::DetachSession, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::DetachSessionResponse => Ok(()),
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("{}: {}", err.code, err.message),
+                ))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
     /// Enter the streaming I/O proxy loop.
     ///
     /// Consumes the client, splits the underlying stream, and runs a
@@ -213,19 +242,51 @@ async fn streaming_loop(
     stdin_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
     sigwinch_rx: &mut tokio::sync::mpsc::Receiver<(u16, u16)>,
 ) -> io::Result<()> {
+    // Ctrl+\ double-tap detection state
+    let mut pending_ctrl_backslash = false;
+    let ctrl_backslash_timer = tokio::time::sleep(std::time::Duration::from_millis(500));
+    tokio::pin!(ctrl_backslash_timer);
+
     loop {
         tokio::select! {
             // Stdin data → StdinInput frame to server
             data = stdin_rx.recv() => {
                 match data {
                     Some(data) => {
-                        let frame = Frame::data(FrameType::StdinInput, data);
-                        if frame.write_to(&mut writer).await.is_err() {
-                            break;
+                        if crate::input::is_ctrl_backslash(&data) {
+                            if pending_ctrl_backslash {
+                                // Double-tap: detach
+                                let detach = Frame::new(FrameType::Detach, Bytes::new());
+                                let _ = detach.write_to(&mut writer).await;
+                                break;
+                            } else {
+                                // First tap: buffer it, start timer
+                                pending_ctrl_backslash = true;
+                                ctrl_backslash_timer.as_mut().reset(
+                                    tokio::time::Instant::now() + std::time::Duration::from_millis(500)
+                                );
+                            }
+                        } else {
+                            if pending_ctrl_backslash {
+                                // Flush the buffered Ctrl+\ first
+                                pending_ctrl_backslash = false;
+                                let flush = Frame::data(FrameType::StdinInput, Bytes::from_static(&[0x1c]));
+                                if flush.write_to(&mut writer).await.is_err() {
+                                    break;
+                                }
+                            }
+                            let frame = Frame::data(FrameType::StdinInput, data);
+                            if frame.write_to(&mut writer).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     None => {
-                        // Stdin closed — send Detach and exit
+                        // Stdin closed — flush buffered Ctrl+\ if pending, then detach
+                        if pending_ctrl_backslash {
+                            let flush = Frame::data(FrameType::StdinInput, Bytes::from_static(&[0x1c]));
+                            let _ = flush.write_to(&mut writer).await;
+                        }
                         let detach = Frame::new(FrameType::Detach, Bytes::new());
                         let _ = detach.write_to(&mut writer).await;
                         break;
@@ -271,6 +332,15 @@ async fn streaming_loop(
                     if let Ok(frame) = Frame::control(FrameType::Resize, &msg) {
                         let _ = frame.write_to(&mut writer).await;
                     }
+                }
+            }
+
+            // Ctrl+\ single-tap timeout — forward the buffered keystroke
+            () = &mut ctrl_backslash_timer, if pending_ctrl_backslash => {
+                pending_ctrl_backslash = false;
+                let flush = Frame::data(FrameType::StdinInput, Bytes::from_static(&[0x1c]));
+                if flush.write_to(&mut writer).await.is_err() {
+                    break;
                 }
             }
         }
@@ -613,5 +683,201 @@ mod tests {
         // Clean up
         drop(server_stream);
         let _ = loop_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_client_detach_session() {
+        let sessions = SessionRegistry::new();
+
+        let (s, rx) = crate::session::Session::spawn(
+            "detach-test".to_string(),
+            crate::pty::SpawnCommand::default(),
+            24, 80,
+        ).unwrap();
+        sessions.insert(Some("detach-test".to_string()), s).unwrap();
+        sessions.monitor_child_exit("detach-test".to_string(), rx);
+
+        let path = start_test_server(sessions.clone()).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        client.detach_session("detach-test").await.unwrap();
+
+        // Session should still exist (unlike kill)
+        assert!(sessions.get("detach-test").is_some());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_detach_nonexistent_session() {
+        let sessions = SessionRegistry::new();
+        let path = start_test_server(sessions).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let result = client.detach_session("no-such").await;
+        assert!(result.is_err());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_backslash_double_tap_sends_detach() {
+        let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
+
+        let (reader, writer) = tokio::io::split(client_stream);
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
+
+        let loop_handle = tokio::spawn(async move {
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+        });
+
+        // Send Ctrl+\ twice in quick succession
+        stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
+        stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
+
+        // Should receive a Detach frame (not two StdinInput frames)
+        let frame = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame.frame_type, FrameType::Detach);
+
+        loop_handle.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_backslash_single_tap_timeout_forwards_keystroke() {
+        let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
+
+        let (reader, writer) = tokio::io::split(client_stream);
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
+
+        let loop_handle = tokio::spawn(async move {
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+        });
+
+        // Send a single Ctrl+\ and wait for the timeout
+        stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
+
+        // After 500ms timeout, the keystroke should be forwarded
+        let frame = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame.frame_type, FrameType::StdinInput);
+        assert_eq!(frame.payload.as_ref(), &[0x1c]);
+
+        // Clean up
+        drop(stdin_tx);
+        // Expect Detach frame on stdin close
+        let detach = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(detach.frame_type, FrameType::Detach);
+
+        loop_handle.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_backslash_then_other_key_forwards_both() {
+        let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
+
+        let (reader, writer) = tokio::io::split(client_stream);
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
+
+        let loop_handle = tokio::spawn(async move {
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+        });
+
+        // Send Ctrl+\ followed by 'a'
+        stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
+        // Small delay to ensure ordering
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        stdin_tx.send(Bytes::from_static(b"a")).await.unwrap();
+
+        // Should receive the buffered Ctrl+\ first
+        let frame1 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame1.frame_type, FrameType::StdinInput);
+        assert_eq!(frame1.payload.as_ref(), &[0x1c]);
+
+        // Then the 'a'
+        let frame2 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame2.frame_type, FrameType::StdinInput);
+        assert_eq!(frame2.payload.as_ref(), b"a");
+
+        // Clean up
+        drop(stdin_tx);
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        ).await;
+        let _ = loop_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_ctrl_backslash_pending_on_stdin_close_flushes_then_detaches() {
+        let (client_stream, mut server_stream) = TokioUnixStream::pair().unwrap();
+
+        let (reader, writer) = tokio::io::split(client_stream);
+        let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Bytes>(64);
+        let (_sigwinch_tx, mut sigwinch_rx) = tokio::sync::mpsc::channel::<(u16, u16)>(4);
+
+        let loop_handle = tokio::spawn(async move {
+            streaming_loop(reader, writer, &mut stdin_rx, &mut sigwinch_rx).await
+        });
+
+        // Send Ctrl+\ then immediately close stdin
+        stdin_tx.send(Bytes::from_static(&[0x1c])).await.unwrap();
+        // Small delay to let the loop process the Ctrl+\ before dropping
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        drop(stdin_tx);
+
+        // Should get the flushed Ctrl+\ as StdinInput
+        let frame1 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame1.frame_type, FrameType::StdinInput);
+        assert_eq!(frame1.payload.as_ref(), &[0x1c]);
+
+        // Then the Detach frame
+        let frame2 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Frame::read_from(&mut server_stream),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(frame2.frame_type, FrameType::Detach);
+
+        loop_handle.await.unwrap().unwrap();
     }
 }

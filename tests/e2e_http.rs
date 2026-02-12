@@ -88,6 +88,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
         terminal_size: wsh::terminal::TerminalSize::new(24, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
@@ -237,6 +238,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
         terminal_size: wsh::terminal::TerminalSize::new(5, 80),
         activity: wsh::activity::ActivityTracker::new(),
         is_local: false,
+        detach_signal: tokio::sync::broadcast::channel::<()>(1).0,
     };
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), session).unwrap();
