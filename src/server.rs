@@ -335,7 +335,8 @@ async fn handle_kill_session<S: AsyncRead + AsyncWrite + Unpin>(
     msg: KillSessionMsg,
 ) -> io::Result<()> {
     match sessions.remove(&msg.name) {
-        Some(_) => {
+        Some(session) => {
+            session.detach();
             tracing::info!(session = %msg.name, "session killed via socket");
             let resp = KillSessionResponseMsg { name: msg.name };
             let resp_frame = Frame::control(FrameType::KillSessionResponse, &resp)

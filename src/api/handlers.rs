@@ -918,7 +918,8 @@ async fn handle_server_ws_request(
             };
 
             match state.sessions.remove(&params.name) {
-                Some(_) => {
+                Some(session) => {
+                    session.detach();
                     // Also clean up any subscription for this session
                     if let Some(handle) = sub_handles.remove(&params.name) {
                         handle.task.abort();
@@ -1975,10 +1976,11 @@ pub(super) async fn session_kill(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    state
+    let session = state
         .sessions
         .remove(&name)
         .ok_or_else(|| ApiError::SessionNotFound(name))?;
+    session.detach();
     Ok(StatusCode::NO_CONTENT)
 }
 
