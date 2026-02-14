@@ -501,6 +501,35 @@ async fn handle_ws_json(
                                 }
                             }
 
+                            // Track overlay/panel ownership for cleanup on disconnect.
+                            if resp.error.is_none() {
+                                if req.method == "create_overlay" {
+                                    if let Some(result) = &resp.result {
+                                        if let Some(id) = result.get("id").and_then(|v| v.as_str()) {
+                                            owned_overlay_ids.push(id.to_string());
+                                        }
+                                    }
+                                } else if req.method == "create_panel" {
+                                    if let Some(result) = &resp.result {
+                                        if let Some(id) = result.get("id").and_then(|v| v.as_str()) {
+                                            owned_panel_ids.push(id.to_string());
+                                        }
+                                    }
+                                } else if req.method == "delete_overlay" {
+                                    if let Some(params) = &req.params {
+                                        if let Some(id) = params.get("id").and_then(|v| v.as_str()) {
+                                            owned_overlay_ids.retain(|oid| oid != id);
+                                        }
+                                    }
+                                } else if req.method == "delete_panel" {
+                                    if let Some(params) = &req.params {
+                                        if let Some(id) = params.get("id").and_then(|v| v.as_str()) {
+                                            owned_panel_ids.retain(|oid| oid != id);
+                                        }
+                                    }
+                                }
+                            }
+
                             if let Ok(json) = serde_json::to_string(&resp) {
                                 if ws_tx.send(Message::Text(json)).await.is_err() {
                                     break;
@@ -527,6 +556,23 @@ async fn handle_ws_json(
         session.input_mode.release();
         session.focus.unfocus();
         tracing::debug!("auto-released input capture on WS disconnect");
+    }
+
+    // Clean up overlays and panels created by this connection.
+    for id in &owned_overlay_ids {
+        session.overlays.delete(id);
+    }
+    for id in &owned_panel_ids {
+        session.panels.delete(id);
+    }
+    if !owned_overlay_ids.is_empty() || !owned_panel_ids.is_empty() {
+        tracing::debug!(
+            overlays = owned_overlay_ids.len(),
+            panels = owned_panel_ids.len(),
+            "cleaned up visual resources on WS disconnect"
+        );
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     }
 
     // Send close frame on any exit path
