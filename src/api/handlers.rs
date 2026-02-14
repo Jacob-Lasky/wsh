@@ -899,6 +899,25 @@ async fn handle_server_ws_request(
             let rows = params.rows.unwrap_or(24);
             let cols = params.cols.unwrap_or(80);
 
+            // Pre-check name availability to avoid spawning a PTY that would be
+            // immediately discarded on name conflict.
+            if let Err(e) = state.sessions.name_available(&params.name) {
+                return Some(match e {
+                    RegistryError::NameExists(n) => super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_name_conflict",
+                        &format!("Session name already exists: {}.", n),
+                    ),
+                    RegistryError::NotFound(n) => super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_not_found",
+                        &format!("Session not found: {}.", n),
+                    ),
+                });
+            }
+
             let (session, child_exit_rx) =
                 match Session::spawn_with_options("".to_string(), command, rows, cols, params.cwd, params.env) {
                     Ok(result) => result,
@@ -912,8 +931,8 @@ async fn handle_server_ws_request(
                     }
                 };
 
-            match state.sessions.insert(params.name, session) {
-                Ok(assigned_name) => {
+            match state.sessions.insert_and_get(params.name, session) {
+                Ok((assigned_name, _session)) => {
                     // Monitor child exit so the session is auto-removed.
                     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
                     return Some(super::ws_methods::WsResponse::success(
