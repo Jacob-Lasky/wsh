@@ -104,12 +104,26 @@ impl Session {
         let _ = self.detach_signal.send(());
     }
 
+    /// Explicitly shut down this session's background tasks.
+    ///
+    /// Called when a spawned session cannot be registered in the registry
+    /// (e.g. due to a name conflict). Cancels the session's cancellation
+    /// token and signals detach so all background tasks exit promptly.
+    pub fn shutdown(&self) {
+        self.cancelled.cancel();
+        self.detach();
+    }
+
     /// Send SIGKILL to the child process if we have a PID.
     ///
     /// Used as an escalation path when the child ignores SIGHUP during
     /// shutdown/drain.
     pub fn kill_child(&self) {
         if let Some(pid) = self.pid {
+            if pid > i32::MAX as u32 {
+                tracing::warn!(pid, "PID exceeds i32::MAX, cannot send signal");
+                return;
+            }
             #[cfg(unix)]
             unsafe {
                 libc::kill(pid as i32, libc::SIGKILL);
@@ -171,9 +185,14 @@ impl Session {
         let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
         if let Some(mut child) = pty_child {
             tokio::task::spawn_blocking(move || {
-                match child.wait() {
-                    Ok(status) => tracing::debug!(?status, "session child exited"),
-                    Err(e) => tracing::error!(?e, "error waiting for session child"),
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    match child.wait() {
+                        Ok(status) => tracing::debug!(?status, "session child exited"),
+                        Err(e) => tracing::error!(?e, "error waiting for session child"),
+                    }
+                }));
+                if let Err(e) = result {
+                    tracing::error!("child exit monitor task panicked: {:?}", e);
                 }
                 let _ = child_exit_tx.send(());
             });
@@ -198,32 +217,42 @@ impl Session {
         let broker_clone = broker.clone();
         let activity_clone = activity.clone();
         tokio::task::spawn_blocking(move || {
-            use std::io::Read;
-            let mut reader = pty_reader;
-            let mut buf = [0u8; 4096];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = Bytes::copy_from_slice(&buf[..n]);
-                        broker_clone.publish(data);
-                        activity_clone.touch();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use std::io::Read;
+                let mut reader = pty_reader;
+                let mut buf = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let data = Bytes::copy_from_slice(&buf[..n]);
+                            broker_clone.publish(data);
+                            activity_clone.touch();
+                        }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
+            }));
+            if let Err(e) = result {
+                tracing::error!("PTY reader task panicked: {:?}", e);
             }
         });
 
         // Spawn PTY writer
         tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            let mut writer = pty_writer;
-            let mut rx = input_rx;
-            while let Some(data) = rx.blocking_recv() {
-                if writer.write_all(&data).is_err() {
-                    break;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                use std::io::Write;
+                let mut writer = pty_writer;
+                let mut rx = input_rx;
+                while let Some(data) = rx.blocking_recv() {
+                    if writer.write_all(&data).is_err() {
+                        break;
+                    }
+                    let _ = writer.flush();
                 }
-                let _ = writer.flush();
+            }));
+            if let Err(e) = result {
+                tracing::error!("PTY writer task panicked: {:?}", e);
             }
         });
 
@@ -523,8 +552,9 @@ impl SessionRegistry {
     ///
     /// Called during server shutdown to ensure child processes are cleaned up
     /// promptly (dropping the Session closes PTY handles, which sends SIGHUP
-    /// to the child).
-    pub fn drain(&self) {
+    /// to the child). Returns a `JoinHandle` for the SIGKILL escalation task
+    /// if any sessions were drained, so the caller can await it.
+    pub fn drain(&self) -> Option<tokio::task::JoinHandle<()>> {
         let names = self.list();
         let mut sessions = Vec::new();
         for name in names {
@@ -533,15 +563,16 @@ impl SessionRegistry {
                 sessions.push(session);
             }
         }
-        // Give children 3 seconds to exit from SIGHUP, then escalate to SIGKILL
-        if !sessions.is_empty() {
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                for session in &sessions {
-                    session.kill_child();
-                }
-            });
+        if sessions.is_empty() {
+            return None;
         }
+        // Give children 3 seconds to exit from SIGHUP, then escalate to SIGKILL
+        Some(tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            for session in &sessions {
+                session.kill_child();
+            }
+        }))
     }
 
     /// Subscribe to session lifecycle events.

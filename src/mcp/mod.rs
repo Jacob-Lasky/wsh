@@ -171,22 +171,26 @@ impl WshMcpServer {
                 })?;
 
         let (assigned_name, session) =
-            self.state.sessions.insert_and_get(params.name, session).map_err(
-                |e| match e {
-                    RegistryError::NameExists(n) => ErrorData::invalid_params(
-                        format!("session name already exists: {n}"),
-                        None,
-                    ),
-                    RegistryError::NotFound(n) => ErrorData::internal_error(
-                        format!("unexpected registry error: {n}"),
-                        None,
-                    ),
-                    RegistryError::MaxSessionsReached => ErrorData::internal_error(
-                        "maximum number of sessions reached".to_string(),
-                        None,
-                    ),
-                },
-            )?;
+            match self.state.sessions.insert_and_get(params.name, session.clone()) {
+                Ok(result) => result,
+                Err(e) => {
+                    session.shutdown();
+                    return Err(match e {
+                        RegistryError::NameExists(n) => ErrorData::invalid_params(
+                            format!("session name already exists: {n}"),
+                            None,
+                        ),
+                        RegistryError::NotFound(n) => ErrorData::internal_error(
+                            format!("unexpected registry error: {n}"),
+                            None,
+                        ),
+                        RegistryError::MaxSessionsReached => ErrorData::internal_error(
+                            "maximum number of sessions reached".to_string(),
+                            None,
+                        ),
+                    });
+                }
+            };
 
         // Monitor child exit so the session is auto-removed when the process dies.
         self.state
@@ -661,7 +665,7 @@ impl WshMcpServer {
                     spans.unwrap_or_default(),
                     params.focusable,
                     current_mode,
-                );
+                ).map_err(|e| ErrorData::invalid_params(e, None))?;
 
                 let _ = session
                     .visual_update_tx
@@ -849,7 +853,7 @@ impl WshMcpServer {
                     spans.unwrap_or_default(),
                     params.focusable,
                     current_mode,
-                );
+                ).map_err(|e| ErrorData::invalid_params(e, None))?;
 
                 crate::panel::reconfigure_layout(
                     &session.panels,
@@ -960,6 +964,14 @@ impl WshMcpServer {
                     session.focus.unfocus();
                 }
             }
+        }
+
+        // Reject conflicting focus+unfocus
+        if params.focus.is_some() && params.unfocus {
+            return Err(ErrorData::invalid_params(
+                "cannot set both 'focus' and 'unfocus'",
+                None,
+            ));
         }
 
         // Apply focus change if requested

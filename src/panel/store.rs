@@ -7,6 +7,9 @@ use crate::overlay::{BackgroundStyle, OverlaySpan, RegionWrite, ScreenMode};
 
 use super::types::{Panel, PanelId, Position};
 
+const MAX_PANELS: usize = 256;
+const MAX_SPANS_PER_PANEL: usize = 4096;
+
 /// Thread-safe store for panels
 #[derive(Clone)]
 pub struct PanelStore {
@@ -28,7 +31,7 @@ impl PanelStore {
         }
     }
 
-    /// Create a new panel, returns its ID
+    /// Create a new panel, returns its ID or an error if limits are exceeded.
     pub fn create(
         &self,
         position: Position,
@@ -38,16 +41,22 @@ impl PanelStore {
         spans: Vec<OverlaySpan>,
         focusable: bool,
         screen_mode: ScreenMode,
-    ) -> PanelId {
+    ) -> Result<PanelId, &'static str> {
         let mut inner = self.inner.write();
+        if inner.panels.len() >= MAX_PANELS {
+            return Err("maximum panel count reached");
+        }
+        if spans.len() > MAX_SPANS_PER_PANEL {
+            return Err("too many spans");
+        }
         let id = Uuid::new_v4().to_string();
         let z = z.unwrap_or_else(|| {
             let z = inner.next_z;
-            inner.next_z += 1;
+            inner.next_z = inner.next_z.saturating_add(1);
             z
         });
         if z >= inner.next_z {
-            inner.next_z = z + 1;
+            inner.next_z = z.saturating_add(1);
         }
         let panel = Panel {
             id: id.clone(),
@@ -62,7 +71,7 @@ impl PanelStore {
             screen_mode,
         };
         inner.panels.insert(id.clone(), panel);
-        id
+        Ok(id)
     }
 
     /// Get a panel by ID
@@ -115,7 +124,7 @@ impl PanelStore {
         }
         if let Some(z) = z {
             if z >= inner.next_z {
-                inner.next_z = z + 1;
+                inner.next_z = z.saturating_add(1);
             }
         }
         let panel = inner.panels.get_mut(id).unwrap();
@@ -237,14 +246,14 @@ mod tests {
     #[test]
     fn test_create_panel() {
         let store = PanelStore::new();
-        let id = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
         assert!(!id.is_empty());
     }
 
     #[test]
     fn test_get_panel() {
         let store = PanelStore::new();
-        let id = store.create(Position::Top, 2, Some(10), None, vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Top, 2, Some(10), None, vec![], false, ScreenMode::Normal).unwrap();
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.position, Position::Top);
         assert_eq!(panel.height, 2);
@@ -255,10 +264,10 @@ mod tests {
     #[test]
     fn test_list_sorted_by_position_then_z_desc() {
         let store = PanelStore::new();
-        store.create(Position::Bottom, 1, Some(5), None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Top, 1, Some(3), None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Top, 1, Some(10), None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Bottom, 1, Some(20), None, vec![], false, ScreenMode::Normal);
+        store.create(Position::Bottom, 1, Some(5), None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Top, 1, Some(3), None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Top, 1, Some(10), None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Bottom, 1, Some(20), None, vec![], false, ScreenMode::Normal).unwrap();
 
         let list = store.list();
         assert_eq!(list.len(), 4);
@@ -277,7 +286,7 @@ mod tests {
     #[test]
     fn test_update_spans() {
         let store = PanelStore::new();
-        let id = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
         let new_spans = vec![OverlaySpan {
             text: "updated".to_string(),
             id: None,
@@ -295,7 +304,7 @@ mod tests {
     #[test]
     fn test_patch_partial() {
         let store = PanelStore::new();
-        let id = store.create(Position::Bottom, 1, Some(0), None, vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Bottom, 1, Some(0), None, vec![], false, ScreenMode::Normal).unwrap();
 
         // Patch only height
         assert!(store.patch(&id, None, Some(3), None, None, None));
@@ -315,7 +324,7 @@ mod tests {
     #[test]
     fn test_delete_panel() {
         let store = PanelStore::new();
-        let id = store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
         assert!(store.delete(&id));
         assert!(store.get(&id).is_none());
     }
@@ -329,8 +338,8 @@ mod tests {
     #[test]
     fn test_clear_panels() {
         let store = PanelStore::new();
-        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
+        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
         store.clear();
         assert!(store.list().is_empty());
     }
@@ -338,8 +347,8 @@ mod tests {
     #[test]
     fn test_auto_increment_z() {
         let store = PanelStore::new();
-        let id1 = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
-        let id2 = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
+        let id1 = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
+        let id2 = store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
         let p1 = store.get(&id1).unwrap();
         let p2 = store.get(&id2).unwrap();
         assert!(p2.z > p1.z);
@@ -348,7 +357,7 @@ mod tests {
     #[test]
     fn test_set_visible() {
         let store = PanelStore::new();
-        let id = store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
         assert!(store.get(&id).unwrap().visible);
         store.set_visible(&id, false);
         assert!(!store.get(&id).unwrap().visible);
@@ -381,7 +390,7 @@ mod tests {
                 underline: false,
             },
         ];
-        let pid = store.create(Position::Bottom, 1, None, None, spans, false, ScreenMode::Normal);
+        let pid = store.create(Position::Bottom, 1, None, None, spans, false, ScreenMode::Normal).unwrap();
 
         // Update only the "status" span
         let updates = vec![OverlaySpan {
@@ -433,7 +442,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        let pid = store.create(Position::Bottom, 1, None, None, spans, false, ScreenMode::Normal);
+        let pid = store.create(Position::Bottom, 1, None, None, spans, false, ScreenMode::Normal).unwrap();
 
         // Update with a span ID that doesn't match anything
         let updates = vec![OverlaySpan {
@@ -457,7 +466,7 @@ mod tests {
         use crate::overlay::types::{Color, NamedColor};
 
         let store = PanelStore::new();
-        let pid = store.create(Position::Bottom, 3, None, None, vec![], false, ScreenMode::Normal);
+        let pid = store.create(Position::Bottom, 3, None, None, vec![], false, ScreenMode::Normal).unwrap();
 
         let writes = vec![
             RegionWrite {
@@ -495,7 +504,7 @@ mod tests {
     #[test]
     fn test_region_write_replaces_previous() {
         let store = PanelStore::new();
-        let pid = store.create(Position::Top, 2, None, None, vec![], false, ScreenMode::Normal);
+        let pid = store.create(Position::Top, 2, None, None, vec![], false, ScreenMode::Normal).unwrap();
 
         let writes1 = vec![RegionWrite {
             row: 0,
@@ -550,9 +559,9 @@ mod tests {
     #[test]
     fn test_list_by_mode_filters_correctly() {
         let store = PanelStore::new();
-        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Alt);
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Alt).unwrap();
 
         let normal = store.list_by_mode(ScreenMode::Normal);
         let alt = store.list_by_mode(ScreenMode::Alt);
@@ -563,9 +572,9 @@ mod tests {
     #[test]
     fn test_delete_by_mode_removes_only_matching() {
         let store = PanelStore::new();
-        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal);
-        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Alt);
-        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Alt);
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(Position::Top, 1, None, None, vec![], false, ScreenMode::Alt).unwrap();
+        store.create(Position::Bottom, 1, None, None, vec![], false, ScreenMode::Alt).unwrap();
 
         store.delete_by_mode(ScreenMode::Alt);
         assert_eq!(store.list().len(), 1);
@@ -580,7 +589,7 @@ mod tests {
         let bg = BackgroundStyle {
             bg: Color::Named(NamedColor::Blue),
         };
-        let id = store.create(Position::Bottom, 2, None, Some(bg), vec![], false, ScreenMode::Normal);
+        let id = store.create(Position::Bottom, 2, None, Some(bg), vec![], false, ScreenMode::Normal).unwrap();
         let panel = store.get(&id).unwrap();
         assert!(panel.background.is_some());
         assert_eq!(panel.background.unwrap().bg, Color::Named(NamedColor::Blue));

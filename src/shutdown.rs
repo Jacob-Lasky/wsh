@@ -55,12 +55,15 @@ impl ShutdownCoordinator {
     /// Returns immediately if there are no active connections.
     pub async fn wait_for_all_closed(&self) {
         loop {
+            // Register the notified future BEFORE checking the count to avoid
+            // a race where a guard is dropped between load() and notified().
+            let notified = self.inner.all_closed.notified();
             let count = self.inner.active.load(Ordering::SeqCst);
             if count == 0 {
                 return;
             }
             tracing::debug!(count, "waiting for connections to close");
-            self.inner.all_closed.notified().await;
+            notified.await;
         }
     }
 

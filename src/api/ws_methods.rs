@@ -430,7 +430,10 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Err(e) => return e,
             };
             let current_mode = *session.screen_mode.read();
-            let overlay_id = session.overlays.create(params.x, params.y, params.z, params.width, params.height, params.background, params.spans, params.focusable, current_mode);
+            let overlay_id = match session.overlays.create(params.x, params.y, params.z, params.width, params.height, params.background, params.spans, params.focusable, current_mode) {
+                Ok(id) => id,
+                Err(e) => return WsResponse::error(id, method, "resource_limit_reached", e),
+            };
             let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
             WsResponse::success(id, method, serde_json::json!({ "id": overlay_id }))
         }
@@ -610,9 +613,12 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Err(e) => return e,
             };
             let current_mode = *session.screen_mode.read();
-            let panel_id = session
+            let panel_id = match session
                 .panels
-                .create(params.position, params.height, params.z, params.background, params.spans, params.focusable, current_mode);
+                .create(params.position, params.height, params.z, params.background, params.spans, params.focusable, current_mode) {
+                Ok(id) => id,
+                Err(e) => return WsResponse::error(id, method, "resource_limit_reached", e),
+            };
             crate::panel::reconfigure_layout(
                 &session.panels,
                 &session.terminal_size,
@@ -1221,7 +1227,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_clear_overlays() {
         let (session, _rx) = create_test_session();
-        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         assert_eq!(session.overlays.list().len(), 1);
 
         let req = WsRequest {
@@ -1346,7 +1352,7 @@ mod tests {
         let id = session.overlays.create(5, 10, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Test".to_string(),
             id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
-        }], false, crate::overlay::ScreenMode::Normal);
+        }], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "get_overlay".to_string(),
@@ -1377,7 +1383,7 @@ mod tests {
         let id = session.overlays.create(0, 0, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Old".to_string(),
             id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
-        }], false, crate::overlay::ScreenMode::Normal);
+        }], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "update_overlay".to_string(),
@@ -1393,7 +1399,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_patch_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "patch_overlay".to_string(),
@@ -1410,7 +1416,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_delete_overlay() {
         let (session, _rx) = create_test_session();
-        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "delete_overlay".to_string(),
@@ -1485,7 +1491,7 @@ mod tests {
             }],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: None,
             method: "get_panel".to_string(),
@@ -1522,7 +1528,7 @@ mod tests {
             vec![],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let panel = session.panels.get(&panel_id).unwrap();
         let req = WsRequest {
             id: None,
@@ -1574,7 +1580,7 @@ mod tests {
             vec![],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: None,
             method: "patch_panel".to_string(),
@@ -1615,7 +1621,7 @@ mod tests {
             vec![],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         assert_eq!(session.panels.list().len(), 1);
         let req = WsRequest {
             id: None,
@@ -1644,8 +1650,8 @@ mod tests {
     #[tokio::test]
     async fn dispatch_clear_panels() {
         let (session, _rx) = create_test_session();
-        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal);
-        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
+        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         assert_eq!(session.panels.list().len(), 2);
 
         let req = WsRequest {
@@ -1673,7 +1679,7 @@ mod tests {
             }],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: None,
             method: "list_panels".to_string(),
@@ -1699,7 +1705,7 @@ mod tests {
                 id: Some("lbl".to_string()),
                 fg: None, bg: None, bold: false, italic: false, underline: false,
             },
-        ], false, crate::overlay::ScreenMode::Normal);
+        ], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: Some(json!(1)),
             method: "update_overlay_spans".to_string(),
@@ -1731,7 +1737,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_overlay_region_write() {
         let (session, _rx) = create_test_session();
-        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: Some(json!(2)),
             method: "overlay_region_write".to_string(),
@@ -1776,7 +1782,7 @@ mod tests {
             }],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: Some(json!(3)),
             method: "update_panel_spans".to_string(),
@@ -1816,7 +1822,7 @@ mod tests {
             vec![],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: Some(json!(4)),
             method: "panel_region_write".to_string(),
@@ -1857,7 +1863,7 @@ mod tests {
                 id: Some("title".to_string()),
                 fg: None, bg: None, bold: false, italic: false, underline: false,
             },
-        ], false, crate::overlay::ScreenMode::Normal);
+        ], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: Some(json!(5)),
             method: "batch_update".to_string(),
@@ -1892,7 +1898,7 @@ mod tests {
             }],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: Some(json!(6)),
             method: "batch_update".to_string(),
@@ -1955,7 +1961,7 @@ mod tests {
                 id: Some("a".to_string()),
                 fg: None, bg: None, bold: false, italic: false, underline: false,
             },
-        ], false, crate::overlay::ScreenMode::Normal);
+        ], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "batch_update".to_string(),
@@ -1976,7 +1982,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_batch_update_writes_only() {
         let (session, _rx) = create_test_session();
-        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "batch_update".to_string(),
@@ -2014,7 +2020,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_focus_focusable_overlay() {
         let (session, _rx) = create_test_session();
-        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal);
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "focus".to_string(),
@@ -2029,7 +2035,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_focus_non_focusable_overlay() {
         let (session, _rx) = create_test_session();
-        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
             method: "focus".to_string(),
@@ -2064,7 +2070,7 @@ mod tests {
             vec![],
             true,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
         let req = WsRequest {
             id: None,
             method: "focus".to_string(),
@@ -2079,7 +2085,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_unfocus() {
         let (session, _rx) = create_test_session();
-        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal);
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal).unwrap();
         session.focus.focus(oid.clone());
         assert_eq!(session.focus.focused(), Some(oid));
 
@@ -2097,7 +2103,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_get_focus_after_focus() {
         let (session, _rx) = create_test_session();
-        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal);
+        let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal).unwrap();
         session.focus.focus(oid.clone());
 
         let req = WsRequest {
@@ -2244,13 +2250,13 @@ mod tests {
         let (session, _rx) = create_test_session();
 
         // Create overlay in normal mode
-        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
 
         // Switch to alt mode
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
 
         // Create overlay in alt mode
-        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Alt);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Alt).unwrap();
 
         // list_overlays should only return alt-mode overlays
         let req = WsRequest {
@@ -2286,7 +2292,7 @@ mod tests {
             vec![],
             false,
             crate::overlay::ScreenMode::Normal,
-        );
+        ).unwrap();
 
         // Switch to alt mode
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
@@ -2300,7 +2306,7 @@ mod tests {
             vec![],
             false,
             crate::overlay::ScreenMode::Alt,
-        );
+        ).unwrap();
 
         // list_panels should only return alt-mode panels
         let req = WsRequest {
@@ -2382,12 +2388,12 @@ mod tests {
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
 
         // Create alt-mode overlay and panel
-        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Alt);
-        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Alt);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Alt).unwrap();
+        session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Alt).unwrap();
 
         // Also create normal-mode elements (should survive)
-        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal);
-        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal);
+        session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
+        session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
 
         assert_eq!(session.overlays.list().len(), 2);
         assert_eq!(session.panels.list().len(), 2);

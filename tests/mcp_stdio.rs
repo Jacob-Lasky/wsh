@@ -383,7 +383,10 @@ fn test_mcp_stdio_full_tool_exercise() {
             serde_json::from_str(kill_text).expect("Expected valid JSON");
         assert_eq!(kill_parsed["status"], "killed");
 
-        // 6. Verify session is removed by listing again
+        // 6. Verify session is removed by listing again.
+        //    In ephemeral mode, killing the last session triggers server shutdown,
+        //    so this request may get an error (server already closing) or an empty
+        //    list. Both outcomes confirm the session was killed.
         let verify_request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 5,
@@ -397,18 +400,24 @@ fn test_mcp_stdio_full_tool_exercise() {
         let verify_response = read_jsonrpc(&mut reader);
 
         assert_eq!(verify_response["jsonrpc"], "2.0");
-        assert_eq!(verify_response["id"], 5);
 
-        let verify_text = verify_response["result"]["content"][0]["text"]
-            .as_str()
-            .expect("Expected text content in verify response");
-        let remaining: Vec<serde_json::Value> =
-            serde_json::from_str(verify_text).expect("Expected JSON array");
-        assert!(
-            remaining.is_empty(),
-            "Session list should be empty after kill, got: {:?}",
-            remaining
-        );
+        if let Some(verify_text) = verify_response["result"]["content"][0]["text"].as_str() {
+            // Server responded before shutting down — list should be empty
+            let remaining: Vec<serde_json::Value> =
+                serde_json::from_str(verify_text).expect("Expected JSON array");
+            assert!(
+                remaining.is_empty(),
+                "Session list should be empty after kill, got: {:?}",
+                remaining
+            );
+        } else {
+            // Server shut down before responding — verify we got an error response
+            assert!(
+                verify_response["error"].is_object(),
+                "Expected either a result or an error, got: {}",
+                verify_response
+            );
+        }
 
         // Clean shutdown
         drop(stdin);

@@ -94,6 +94,12 @@ impl Frame {
 
     /// Encode this frame into bytes.
     pub fn encode(&self) -> Bytes {
+        assert!(
+            self.payload.len() <= MAX_PAYLOAD_SIZE as usize,
+            "frame payload exceeds maximum size: {} > {}",
+            self.payload.len(),
+            MAX_PAYLOAD_SIZE
+        );
         let mut buf = BytesMut::with_capacity(5 + self.payload.len());
         buf.put_u8(self.frame_type as u8);
         buf.put_u32(self.payload.len() as u32);
@@ -111,9 +117,10 @@ impl Frame {
     /// Read a frame from an async reader.
     ///
     /// The 5-byte header (type + length) is read in a single `read_exact`
-    /// call, making this method cancellation-safe for use in `select!` loops:
-    /// if the future is dropped before the header is fully read, no partial
-    /// state has been consumed from the reader.
+    /// call, making this method cancellation-safe for use in `select!` loops
+    /// *as long as the caller never re-reads from the same reader after
+    /// cancellation*. If the header read is interrupted mid-way and the
+    /// caller retries, the reader will be in an inconsistent state.
     pub async fn read_from<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<Self> {
         let mut header = [0u8; 5];
         reader.read_exact(&mut header).await?;

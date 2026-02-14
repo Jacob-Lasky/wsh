@@ -5,6 +5,9 @@ pub mod state;
 
 mod task;
 
+use std::panic::AssertUnwindSafe;
+
+use futures::FutureExt;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
@@ -50,14 +53,22 @@ impl Parser {
         let (raw_tx, raw_rx) = raw_broker.subscribe_parser();
         let event_tx_clone = event_tx.clone();
 
-        tokio::spawn(task::run(
-            raw_rx,
-            query_rx,
-            event_tx_clone,
-            cols,
-            rows,
-            scrollback_limit,
-        ));
+        tokio::spawn(async move {
+            let result = AssertUnwindSafe(task::run(
+                raw_rx,
+                query_rx,
+                event_tx_clone,
+                cols,
+                rows,
+                scrollback_limit,
+            ))
+            .catch_unwind()
+            .await;
+            match result {
+                Ok(()) => tracing::warn!("parser task exited unexpectedly"),
+                Err(e) => tracing::error!("parser task panicked: {:?}", e),
+            }
+        });
 
         Self {
             query_tx,

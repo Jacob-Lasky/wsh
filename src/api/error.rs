@@ -55,6 +55,8 @@ pub enum ApiError {
     AlreadyInAltScreen,
     /// 409 - Session is not in alternate screen mode.
     NotInAltScreen,
+    /// 429 - Resource limit reached (too many overlays, panels, etc.).
+    ResourceLimitReached(String),
     /// 500 - Catch-all internal error.
     InternalError(String),
 }
@@ -85,6 +87,7 @@ impl ApiError {
             ApiError::NotFocusable(_) => StatusCode::BAD_REQUEST,
             ApiError::AlreadyInAltScreen => StatusCode::CONFLICT,
             ApiError::NotInAltScreen => StatusCode::CONFLICT,
+            ApiError::ResourceLimitReached(_) => StatusCode::TOO_MANY_REQUESTS,
             ApiError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -114,6 +117,7 @@ impl ApiError {
             ApiError::NotFocusable(_) => "not_focusable",
             ApiError::AlreadyInAltScreen => "already_in_alt_screen",
             ApiError::NotInAltScreen => "not_in_alt_screen",
+            ApiError::ResourceLimitReached(_) => "resource_limit_reached",
             ApiError::InternalError(_) => "internal_error",
         }
     }
@@ -158,6 +162,9 @@ impl ApiError {
             }
             ApiError::NotInAltScreen => {
                 "Session is not in alternate screen mode.".to_string()
+            }
+            ApiError::ResourceLimitReached(detail) => {
+                format!("Resource limit reached: {}.", detail)
             }
             ApiError::InternalError(detail) => format!("Internal error: {}.", detail),
         }

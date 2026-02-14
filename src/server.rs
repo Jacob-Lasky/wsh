@@ -8,7 +8,8 @@
 use bytes::Bytes;
 use std::io;
 use std::path::{Path, PathBuf};
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tracing;
 
@@ -76,6 +77,8 @@ pub async fn serve(
                     }
                     Err(e) => {
                         tracing::error!(?e, "failed to accept Unix socket connection");
+                        // Backoff to prevent tight loop under sustained accept errors
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                 }
             }
@@ -186,9 +189,13 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     )
     .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    let name = sessions.insert(msg.name, session.clone()).map_err(|e| {
-        io::Error::new(io::ErrorKind::AlreadyExists, e.to_string())
-    })?;
+    let name = match sessions.insert(msg.name, session.clone()) {
+        Ok(name) => name,
+        Err(e) => {
+            session.shutdown();
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, e.to_string()));
+        }
+    };
 
     sessions.monitor_child_exit(name.clone(), child_exit_rx);
 
@@ -452,6 +459,19 @@ async fn send_initial_visual_state<S: AsyncWrite + Unpin>(
     Ok(())
 }
 
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Write a frame with a timeout. Returns false if the write failed or timed out.
+async fn write_frame_with_timeout<W: AsyncWriteExt + Unpin>(
+    frame: &Frame,
+    writer: &mut W,
+) -> bool {
+    tokio::time::timeout(WRITE_TIMEOUT, frame.write_to(writer))
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false)
+}
+
 /// Main streaming loop: proxy I/O between the client and the session.
 ///
 /// - Client → Server: StdinInput frames are forwarded to session.input_tx
@@ -485,7 +505,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
             // Remote detach signal → send Detach frame to client and break
             _ = detach_rx.recv() => {
                 let detach_frame = Frame::new(FrameType::Detach, Bytes::new());
-                let _ = detach_frame.write_to(&mut writer).await;
+                let _ = write_frame_with_timeout(&detach_frame, &mut writer).await;
                 break;
             }
 
@@ -498,7 +518,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                             overlays: session.overlays.list_by_mode(mode),
                         };
                         if let Ok(frame) = Frame::control(FrameType::OverlaySync, &msg) {
-                            if frame.write_to(&mut writer).await.is_err() {
+                            if !write_frame_with_timeout(&frame, &mut writer).await {
                                 break;
                             }
                         }
@@ -514,13 +534,16 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                             scroll_region_bottom: layout.scroll_region_bottom,
                         };
                         if let Ok(frame) = Frame::control(FrameType::PanelSync, &msg) {
-                            if frame.write_to(&mut writer).await.is_err() {
+                            if !write_frame_with_timeout(&frame, &mut writer).await {
                                 break;
                             }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "socket client lagged on visual updates, disconnecting");
+                        break;
+                    }
                 }
             }
 
@@ -529,12 +552,15 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                 match result {
                     Ok(data) => {
                         let frame = Frame::data(FrameType::PtyOutput, data);
-                        if frame.write_to(&mut writer).await.is_err() {
+                        if !write_frame_with_timeout(&frame, &mut writer).await {
                             break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "socket client lagged on output, disconnecting");
+                        break;
+                    }
                 }
             }
 
@@ -614,13 +640,11 @@ mod tests {
     use tokio::net::UnixStream;
     use tempfile::TempDir;
 
-    /// Start a test server on a temporary socket and return the path.
-    /// The TempDir is leaked to keep the directory alive for the test.
-    async fn start_test_server(sessions: SessionRegistry) -> PathBuf {
+    /// Start a test server on a temporary socket and return the path and TempDir.
+    /// The caller must keep the TempDir alive for the duration of the test.
+    async fn start_test_server(sessions: SessionRegistry) -> (PathBuf, TempDir) {
         let dir = TempDir::new().unwrap();
         let socket_path = dir.path().join("test.sock");
-        // Leak the TempDir so it stays alive for the duration of the test
-        std::mem::forget(dir);
         let path = socket_path.clone();
 
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -636,13 +660,13 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
-        path
+        (path, dir)
     }
 
     #[tokio::test]
     async fn test_create_session_via_socket() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -688,7 +712,7 @@ mod tests {
         sessions.insert(Some("attach-target".to_string()), session).unwrap();
         sessions.monitor_child_exit("attach-target".to_string(), child_exit_rx);
 
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -715,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn test_attach_nonexistent_session_returns_error() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -740,7 +764,7 @@ mod tests {
     #[tokio::test]
     async fn test_stdin_forwarding() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -788,7 +812,7 @@ mod tests {
     #[tokio::test]
     async fn test_detach_ends_streaming() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -823,7 +847,7 @@ mod tests {
     #[tokio::test]
     async fn test_resize_forwarding() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -871,7 +895,7 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_initial_frame() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -897,7 +921,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_sessions_empty() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
 
@@ -937,7 +961,7 @@ mod tests {
         sessions.insert(Some("list-b".to_string()), session2).unwrap();
         sessions.monitor_child_exit("list-b".to_string(), rx2);
 
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
         Frame::control(FrameType::ListSessions, &ListSessionsMsg {})
@@ -969,7 +993,7 @@ mod tests {
         sessions.insert(Some("kill-me".to_string()), session).unwrap();
         sessions.monitor_child_exit("kill-me".to_string(), rx);
 
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
         let msg = KillSessionMsg { name: "kill-me".to_string() };
@@ -993,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn test_kill_session_not_found() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut stream = UnixStream::connect(&path).await.unwrap();
         let msg = KillSessionMsg { name: "nonexistent".to_string() };
@@ -1068,7 +1092,7 @@ mod tests {
     #[tokio::test]
     async fn test_attach_scrollback_none_returns_empty() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let _creator = create_session_with_output(&sessions, &path, "sb-none-test").await;
 
@@ -1103,7 +1127,7 @@ mod tests {
     #[tokio::test]
     async fn test_attach_scrollback_all_returns_content() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let _creator = create_session_with_output(&sessions, &path, "sb-all-test").await;
 
@@ -1150,7 +1174,7 @@ mod tests {
     #[tokio::test]
     async fn test_attach_scrollback_lines_limits_output() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         // Create a session and generate enough output to have scrollback
         let mut stream = UnixStream::connect(&path).await.unwrap();
@@ -1258,7 +1282,7 @@ mod tests {
     #[tokio::test]
     async fn test_attach_screen_data_present() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let _creator = create_session_with_output(&sessions, &path, "screen-test").await;
 

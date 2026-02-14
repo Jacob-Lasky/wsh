@@ -417,12 +417,14 @@ async fn run_server(
         }
     }
 
-    // Signal WebSocket handlers to send close frames
+    // 1. Stop accepting new connections
+    let _ = server_shutdown_tx.send(());
+    socket_cancel.cancel();
+
+    // 2. Signal existing WS handlers to close
     shutdown.shutdown();
 
-    // Wait for all WS connections to close (with a timeout so we don't hang).
-    // Also enforce a minimum grace period to allow in-flight HTTP requests to
-    // complete before we tear down sessions and stop the server.
+    // 3. Wait for all WS connections to close (with timeout)
     let shutdown_result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         async {
@@ -435,21 +437,20 @@ async fn run_server(
         tracing::warn!("shutdown timed out waiting for connections to close");
     }
 
-    // Detach all streaming clients and clean up sessions. Dropping
-    // sessions closes PTY handles, which sends SIGHUP to children.
-    sessions.drain();
+    // 4. Drain sessions (detach clients, SIGHUP children, schedule SIGKILL)
+    let kill_handle = sessions.drain();
 
-    let _ = server_shutdown_tx.send(());
-
-    // Wait for HTTP server to stop
+    // 5. Await server tasks
     if let Err(e) = http_handle.await {
         tracing::warn!(?e, "HTTP server task panicked");
     }
-
-    // Gracefully stop the socket server
-    socket_cancel.cancel();
     if let Err(e) = socket_handle.await {
         tracing::warn!(?e, "socket server task panicked");
+    }
+
+    // 6. Wait for SIGKILL escalation to complete (if any sessions were drained)
+    if let Some(handle) = kill_handle {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
     }
 
     // Remove the socket file so a subsequent server can bind
@@ -488,7 +489,11 @@ async fn run_mcp(
     }
 
     let mcp_url = format!("http://{}/mcp", bind);
-    let http_client = reqwest::Client::new();
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("failed to build HTTP client");
     let mut session_id: Option<String> = None;
 
     let stdin = tokio::io::stdin();
@@ -511,6 +516,12 @@ async fn run_mcp(
             continue;
         }
 
+        // Extract the JSON-RPC request ID so we can echo it in error responses
+        let request_id = serde_json::from_str::<serde_json::Value>(trimmed)
+            .ok()
+            .and_then(|v| v.get("id").cloned())
+            .unwrap_or(serde_json::Value::Null);
+
         // Build HTTP request
         let mut req = http_client
             .post(&mcp_url)
@@ -530,14 +541,14 @@ async fn run_mcp(
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(?e, "HTTP request to /mcp failed");
-                // Write a JSON-RPC error to stdout
+                // Write a JSON-RPC error to stdout, echoing the request ID
                 let err_json = serde_json::json!({
                     "jsonrpc": "2.0",
                     "error": {
                         "code": -32603,
                         "message": format!("HTTP request failed: {e}")
                     },
-                    "id": null
+                    "id": request_id
                 });
                 let err_line = format!("{}\n", err_json);
                 tokio::io::AsyncWriteExt::write_all(&mut stdout, err_line.as_bytes())
@@ -583,10 +594,10 @@ async fn run_mcp(
             continue;
         }
 
-        // Parse SSE response: look for `data:` lines in event-stream format.
-        // Check both content-type and body heuristic because some MCP servers
-        // may return SSE-formatted responses without the proper content-type.
-        if content_type.contains("text/event-stream") || body.contains("data:") {
+        // Parse SSE response based on content-type only. The previous body
+        // heuristic (`body.contains("data:")`) caused false positives when
+        // JSON payloads contained the string "data:".
+        if content_type.contains("text/event-stream") {
             // Parse as SSE
             for event in body.split("\n\n") {
                 let event = event.trim();

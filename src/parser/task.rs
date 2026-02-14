@@ -46,12 +46,12 @@ pub async fn run(
                         // Emit mode/reset events if alternate screen state changed
                         if new_alternate != alternate_active {
                             alternate_active = new_alternate;
-                            seq += 1;
+                            seq = seq.wrapping_add(1);
                             let _ = event_tx.send(Event::Mode {
                                 seq,
                                 alternate_active,
                             });
-                            seq += 1;
+                            seq = seq.wrapping_add(1);
                             let _ = event_tx.send(Event::Reset {
                                 seq,
                                 reason: if alternate_active {
@@ -66,7 +66,7 @@ pub async fn run(
                         let total_lines = vt.lines().count();
                         for line_idx in changed_lines {
                             if let Some(line) = vt.lines().nth(line_idx) {
-                                seq += 1;
+                                seq = seq.wrapping_add(1);
                                 let _ = event_tx.send(Event::Line {
                                     seq,
                                     index: line_idx,
@@ -82,7 +82,7 @@ pub async fn run(
                             || cursor.col != last_cursor.col
                             || cursor.visible != last_cursor.visible
                         {
-                            seq += 1;
+                            seq = seq.wrapping_add(1);
                             let _ = event_tx.send(Event::Cursor {
                                 seq,
                                 row: cursor.row,
@@ -144,14 +144,13 @@ fn handle_query(
             limit,
         } => {
             let styled = matches!(format, Format::Styled);
-            let all_lines: Vec<_> = vt.lines().collect();
-            let total_lines = all_lines.len();
+            let total_lines = vt.lines().count();
 
             // Return all lines (history + current screen), applying offset/limit
             // In alternate screen mode, this returns just the current screen
             // since the alternate buffer has no scrollback history
-            let lines: Vec<_> = all_lines
-                .into_iter()
+            let lines: Vec<_> = vt
+                .lines()
                 .skip(offset)
                 .take(limit)
                 .map(|l| format_line(l, styled))
@@ -179,7 +178,7 @@ fn handle_query(
 
         Query::Resize { cols, rows } => {
             let _changes = vt.resize(cols, rows);
-            *seq += 1;
+            *seq = seq.wrapping_add(1);
             let _ = event_tx.send(Event::Reset {
                 seq: *seq,
                 reason: ResetReason::Resize,
@@ -232,6 +231,12 @@ impl AlternateScreenDetector {
         };
 
         for &byte in text.as_bytes() {
+            // Guard against unbounded growth from malformed sequences
+            if self.partial.len() > 64 {
+                self.partial.clear();
+                scan = ScanState::Ground;
+            }
+
             match scan {
                 ScanState::Ground => {
                     if byte == 0x1b {

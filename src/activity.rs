@@ -29,13 +29,13 @@ impl ActivityTracker {
 
     /// Record activity. Safe to call from blocking threads.
     pub fn touch(&self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.generation.fetch_add(1, Ordering::Release);
         self.tx.send_replace(Instant::now());
     }
 
     /// Current generation counter value.
     pub fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Relaxed)
+        self.generation.load(Ordering::Acquire)
     }
 
     /// Subscribe to activity changes. Returns a watch receiver that gets
@@ -62,10 +62,10 @@ impl ActivityTracker {
         // If the caller already saw this generation, wait for new activity
         // before entering the quiescence loop.
         if let Some(seen) = last_seen {
-            let current = self.generation.load(Ordering::Relaxed);
+            let current = self.generation.load(Ordering::Acquire);
             if current == seen {
                 if rx.changed().await.is_err() {
-                    return self.generation.load(Ordering::Relaxed);
+                    return self.generation.load(Ordering::Acquire);
                 }
             }
         }
@@ -74,7 +74,7 @@ impl ActivityTracker {
             let last = *rx.borrow_and_update();
             let elapsed = last.elapsed();
             if elapsed >= timeout {
-                return self.generation.load(Ordering::Relaxed);
+                return self.generation.load(Ordering::Acquire);
             }
             let remaining = timeout - elapsed;
             tokio::select! {
@@ -83,14 +83,14 @@ impl ActivityTracker {
                     // between sleep completing and us running.
                     let last = *rx.borrow_and_update();
                     if last.elapsed() >= timeout {
-                        return self.generation.load(Ordering::Relaxed);
+                        return self.generation.load(Ordering::Acquire);
                     }
                     // Not yet quiescent — loop again with fresh remaining.
                 }
                 res = rx.changed() => {
                     if res.is_err() {
                         // Sender dropped — treat as quiescent.
-                        return self.generation.load(Ordering::Relaxed);
+                        return self.generation.load(Ordering::Acquire);
                     }
                     // Activity detected — loop to recalculate remaining.
                 }
@@ -121,13 +121,13 @@ impl ActivityTracker {
                 _ = tokio::time::sleep(remaining) => {
                     let last = *rx.borrow_and_update();
                     if last.elapsed() >= timeout {
-                        return self.generation.load(Ordering::Relaxed);
+                        return self.generation.load(Ordering::Acquire);
                     }
                     // Activity arrived during sleep — loop again.
                 }
                 res = rx.changed() => {
                     if res.is_err() {
-                        return self.generation.load(Ordering::Relaxed);
+                        return self.generation.load(Ordering::Acquire);
                     }
                     // Activity detected — loop with fresh remaining.
                 }

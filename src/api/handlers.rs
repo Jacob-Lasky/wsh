@@ -84,6 +84,7 @@ async fn handle_ws_raw(
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.reset(); // don't fire immediately
     let mut last_pong = tokio::time::Instant::now();
+    let mut ping_sent = false;
     const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
     // Main loop: handle PTY output, WebSocket input, and shutdown signal
@@ -136,13 +137,14 @@ async fn handle_ws_raw(
 
             // Ping keepalive
             _ = ping_interval.tick() => {
-                if last_pong.elapsed() > PONG_TIMEOUT {
+                if ping_sent && last_pong.elapsed() > PONG_TIMEOUT {
                     tracing::debug!("ws_raw client unresponsive (no pong), closing");
                     break;
                 }
                 if ws_tx.send(Message::Ping(vec![])).await.is_err() {
                     break;
                 }
+                ping_sent = true;
             }
 
             // Session was killed/removed
@@ -227,6 +229,7 @@ async fn handle_ws_json(
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.reset();
     let mut last_pong = tokio::time::Instant::now();
+    let mut ping_sent = false;
     const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
     // Main event loop
@@ -370,13 +373,14 @@ async fn handle_ws_json(
 
             // Ping keepalive
             _ = ping_interval.tick() => {
-                if last_pong.elapsed() > PONG_TIMEOUT {
+                if ping_sent && last_pong.elapsed() > PONG_TIMEOUT {
                     tracing::debug!("ws_json client unresponsive (no pong), closing");
                     break;
                 }
                 if ws_tx.send(Message::Ping(vec![])).await.is_err() {
                     break;
                 }
+                ping_sent = true;
             }
 
             msg = ws_rx.next() => {
@@ -703,6 +707,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.reset();
     let mut last_pong = tokio::time::Instant::now();
+    let mut ping_sent = false;
     const PONG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
     // Main event loop
@@ -793,13 +798,14 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
 
             // Ping keepalive
             _ = ping_interval.tick() => {
-                if last_pong.elapsed() > PONG_TIMEOUT {
+                if ping_sent && last_pong.elapsed() > PONG_TIMEOUT {
                     tracing::debug!("server ws_json client unresponsive (no pong), closing");
                     break;
                 }
                 if ws_tx.send(Message::Ping(vec![])).await.is_err() {
                     break;
                 }
+                ping_sent = true;
             }
 
             // Registry lifecycle events
@@ -966,7 +972,7 @@ async fn handle_server_ws_request(
                     }
                 };
 
-            match state.sessions.insert_and_get(params.name, session) {
+            match state.sessions.insert_and_get(params.name, session.clone()) {
                 Ok((assigned_name, _session)) => {
                     // Monitor child exit so the session is auto-removed.
                     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
@@ -976,29 +982,28 @@ async fn handle_server_ws_request(
                         serde_json::json!({ "name": assigned_name }),
                     ));
                 }
-                Err(RegistryError::NameExists(n)) => {
-                    return Some(super::ws_methods::WsResponse::error(
-                        id,
-                        method,
-                        "session_name_conflict",
-                        &format!("Session name already exists: {}.", n),
-                    ));
-                }
-                Err(RegistryError::NotFound(n)) => {
-                    return Some(super::ws_methods::WsResponse::error(
-                        id,
-                        method,
-                        "session_not_found",
-                        &format!("Session not found: {}.", n),
-                    ));
-                }
-                Err(RegistryError::MaxSessionsReached) => {
-                    return Some(super::ws_methods::WsResponse::error(
-                        id,
-                        method,
-                        "max_sessions_reached",
-                        "Maximum number of sessions reached.",
-                    ));
+                Err(e) => {
+                    session.shutdown();
+                    return Some(match e {
+                        RegistryError::NameExists(n) => super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "session_name_conflict",
+                            &format!("Session name already exists: {}.", n),
+                        ),
+                        RegistryError::NotFound(n) => super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "session_not_found",
+                            &format!("Session not found: {}.", n),
+                        ),
+                        RegistryError::MaxSessionsReached => super::ws_methods::WsResponse::error(
+                            id,
+                            method,
+                            "max_sessions_reached",
+                            "Maximum number of sessions reached.",
+                        ),
+                    });
                 }
             }
         }
@@ -1584,7 +1589,8 @@ pub(super) async fn overlay_create(
 ) -> Result<(StatusCode, Json<CreateOverlayResponse>), ApiError> {
     let session = get_session(&state.sessions, &name)?;
     let current_mode = *session.screen_mode.read();
-    let id = session.overlays.create(req.x, req.y, req.z, req.width, req.height, req.background, req.spans, req.focusable, current_mode);
+    let id = session.overlays.create(req.x, req.y, req.z, req.width, req.height, req.background, req.spans, req.focusable, current_mode)
+        .map_err(|e| ApiError::ResourceLimitReached(e.to_string()))?;
     let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
     Ok((StatusCode::CREATED, Json(CreateOverlayResponse { id })))
 }
@@ -1740,7 +1746,8 @@ pub(super) async fn panel_create(
     let current_mode = *session.screen_mode.read();
     let id = session
         .panels
-        .create(req.position, req.height, req.z, req.background, req.spans, req.focusable, current_mode);
+        .create(req.position, req.height, req.z, req.background, req.spans, req.focusable, current_mode)
+        .map_err(|e| ApiError::ResourceLimitReached(e.to_string()))?;
     panel::reconfigure_layout(&session.panels, &session.terminal_size, &session.pty, &session.parser)
         .await;
     let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
@@ -2090,14 +2097,17 @@ pub(super) async fn session_create(
         Session::spawn_with_options("".to_string(), command, rows, cols, req.cwd, req.env)
             .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
 
-    let (assigned_name, session) = state
-        .sessions
-        .insert_and_get(req.name, session)
-        .map_err(|e| match e {
-            RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
-            RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
-            RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
-        })?;
+    let (assigned_name, session) = match state.sessions.insert_and_get(req.name, session.clone()) {
+        Ok(result) => result,
+        Err(e) => {
+            session.shutdown();
+            return Err(match e {
+                RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
+                RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+                RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
+            });
+        }
+    };
 
     // Monitor child exit so the session is auto-removed when the process dies.
     state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);

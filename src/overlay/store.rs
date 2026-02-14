@@ -5,6 +5,9 @@ use uuid::Uuid;
 
 use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan, RegionWrite, ScreenMode};
 
+const MAX_OVERLAYS: usize = 256;
+const MAX_SPANS_PER_OVERLAY: usize = 4096;
+
 /// Thread-safe store for overlays
 #[derive(Clone)]
 pub struct OverlayStore {
@@ -26,7 +29,7 @@ impl OverlayStore {
         }
     }
 
-    /// Create a new overlay, returns its ID
+    /// Create a new overlay, returns its ID or an error if limits are exceeded.
     pub fn create(
         &self,
         x: u16,
@@ -38,17 +41,23 @@ impl OverlayStore {
         spans: Vec<OverlaySpan>,
         focusable: bool,
         screen_mode: ScreenMode,
-    ) -> OverlayId {
+    ) -> Result<OverlayId, &'static str> {
         let mut inner = self.inner.write();
+        if inner.overlays.len() >= MAX_OVERLAYS {
+            return Err("maximum overlay count reached");
+        }
+        if spans.len() > MAX_SPANS_PER_OVERLAY {
+            return Err("too many spans");
+        }
         let id = Uuid::new_v4().to_string();
         let z = z.unwrap_or_else(|| {
             let z = inner.next_z;
-            inner.next_z += 1;
+            inner.next_z = inner.next_z.saturating_add(1);
             z
         });
         // Update next_z if explicit z is higher
         if z >= inner.next_z {
-            inner.next_z = z + 1;
+            inner.next_z = z.saturating_add(1);
         }
         let overlay = Overlay {
             id: id.clone(),
@@ -64,7 +73,7 @@ impl OverlayStore {
             screen_mode,
         };
         inner.overlays.insert(id.clone(), overlay);
-        id
+        Ok(id)
     }
 
     /// Get an overlay by ID
@@ -104,33 +113,32 @@ impl OverlayStore {
         background: Option<BackgroundStyle>,
     ) -> bool {
         let mut inner = self.inner.write();
-        if let Some(overlay) = inner.overlays.get_mut(id) {
-            if let Some(x) = x {
-                overlay.x = x;
-            }
-            if let Some(y) = y {
-                overlay.y = y;
-            }
-            if let Some(z) = z {
-                overlay.z = z;
-            }
-            if let Some(width) = width {
-                overlay.width = width;
-            }
-            if let Some(height) = height {
-                overlay.height = height;
-            }
-            if let Some(background) = background {
-                overlay.background = Some(background);
-            }
-            true
-        } else {
-            return false;
+        let overlay = match inner.overlays.get_mut(id) {
+            Some(o) => o,
+            None => return false,
         };
-        // Update next_z outside the overlay borrow
+        if let Some(x) = x {
+            overlay.x = x;
+        }
+        if let Some(y) = y {
+            overlay.y = y;
+        }
+        if let Some(z) = z {
+            overlay.z = z;
+        }
+        if let Some(width) = width {
+            overlay.width = width;
+        }
+        if let Some(height) = height {
+            overlay.height = height;
+        }
+        if let Some(background) = background {
+            overlay.background = Some(background);
+        }
+        // Update next_z tracking
         if let Some(z) = z {
             if z >= inner.next_z {
-                inner.next_z = z + 1;
+                inner.next_z = z.saturating_add(1);
             }
         }
         true
@@ -222,14 +230,14 @@ mod tests {
     #[test]
     fn test_create_overlay() {
         let store = OverlayStore::new();
-        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
         assert!(!id.is_empty());
     }
 
     #[test]
     fn test_get_overlay() {
         let store = OverlayStore::new();
-        let id = store.create(5, 10, Some(50), 80, 1, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(5, 10, Some(50), 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
         let overlay = store.get(&id).unwrap();
         assert_eq!(overlay.x, 5);
         assert_eq!(overlay.y, 10);
@@ -239,9 +247,9 @@ mod tests {
     #[test]
     fn test_list_overlays_sorted_by_z() {
         let store = OverlayStore::new();
-        store.create(0, 0, Some(100), 80, 1, None, vec![], false, ScreenMode::Normal);
-        store.create(0, 0, Some(50), 80, 1, None, vec![], false, ScreenMode::Normal);
-        store.create(0, 0, Some(75), 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, Some(100), 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(0, 0, Some(50), 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(0, 0, Some(75), 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
 
         let list = store.list();
         assert_eq!(list.len(), 3);
@@ -253,7 +261,7 @@ mod tests {
     #[test]
     fn test_delete_overlay() {
         let store = OverlayStore::new();
-        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
         assert!(store.delete(&id));
         assert!(store.get(&id).is_none());
     }
@@ -261,8 +269,8 @@ mod tests {
     #[test]
     fn test_clear_overlays() {
         let store = OverlayStore::new();
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
         store.clear();
         assert!(store.list().is_empty());
     }
@@ -270,8 +278,8 @@ mod tests {
     #[test]
     fn test_auto_increment_z() {
         let store = OverlayStore::new();
-        let id1 = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
-        let id2 = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        let id1 = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        let id2 = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
         let o1 = store.get(&id1).unwrap();
         let o2 = store.get(&id2).unwrap();
         assert!(o2.z > o1.z);
@@ -300,7 +308,7 @@ mod tests {
                 underline: false,
             },
         ];
-        let oid = store.create(0, 0, None, 80, 1, None, spans, false, ScreenMode::Normal);
+        let oid = store.create(0, 0, None, 80, 1, None, spans, false, ScreenMode::Normal).unwrap();
 
         // Update only the "value" span
         let updates = vec![OverlaySpan {
@@ -352,7 +360,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        let oid = store.create(0, 0, None, 80, 1, None, spans, false, ScreenMode::Normal);
+        let oid = store.create(0, 0, None, 80, 1, None, spans, false, ScreenMode::Normal).unwrap();
 
         // Update with a span ID that doesn't match anything
         let updates = vec![OverlaySpan {
@@ -374,7 +382,7 @@ mod tests {
     #[test]
     fn test_region_write_stores_writes() {
         let store = OverlayStore::new();
-        let oid = store.create(0, 0, None, 80, 10, None, vec![], false, ScreenMode::Normal);
+        let oid = store.create(0, 0, None, 80, 10, None, vec![], false, ScreenMode::Normal).unwrap();
 
         let writes = vec![
             RegionWrite {
@@ -413,7 +421,7 @@ mod tests {
     #[test]
     fn test_region_write_replaces_previous() {
         let store = OverlayStore::new();
-        let oid = store.create(0, 0, None, 80, 10, None, vec![], false, ScreenMode::Normal);
+        let oid = store.create(0, 0, None, 80, 10, None, vec![], false, ScreenMode::Normal).unwrap();
 
         let writes1 = vec![RegionWrite {
             row: 0,
@@ -467,9 +475,9 @@ mod tests {
     #[test]
     fn test_list_by_mode_filters_correctly() {
         let store = OverlayStore::new();
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt).unwrap();
 
         let normal = store.list_by_mode(ScreenMode::Normal);
         let alt = store.list_by_mode(ScreenMode::Alt);
@@ -480,9 +488,9 @@ mod tests {
     #[test]
     fn test_delete_by_mode_removes_only_matching() {
         let store = OverlayStore::new();
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt);
-        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt);
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt).unwrap();
+        store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Alt).unwrap();
 
         store.delete_by_mode(ScreenMode::Alt);
         assert_eq!(store.list().len(), 1);
@@ -495,7 +503,7 @@ mod tests {
         let bg = BackgroundStyle {
             bg: Color::Named(NamedColor::Blue),
         };
-        let id = store.create(0, 0, None, 40, 10, Some(bg), vec![], false, ScreenMode::Normal);
+        let id = store.create(0, 0, None, 40, 10, Some(bg), vec![], false, ScreenMode::Normal).unwrap();
         let overlay = store.get(&id).unwrap();
         assert!(overlay.background.is_some());
         assert_eq!(overlay.background.unwrap().bg, Color::Named(NamedColor::Blue));
@@ -504,7 +512,7 @@ mod tests {
     #[test]
     fn test_move_to_with_background() {
         let store = OverlayStore::new();
-        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal);
+        let id = store.create(0, 0, None, 80, 1, None, vec![], false, ScreenMode::Normal).unwrap();
         assert!(store.get(&id).unwrap().background.is_none());
 
         let bg = BackgroundStyle {

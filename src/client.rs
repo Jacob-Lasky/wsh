@@ -519,11 +519,11 @@ mod tests {
     use tempfile::TempDir;
     use tokio::net::UnixStream as TokioUnixStream;
 
-    /// Start a test server on a temporary socket and return the path.
-    async fn start_test_server(sessions: SessionRegistry) -> PathBuf {
+    /// Start a test server on a temporary socket and return the path and TempDir.
+    /// The caller must keep the TempDir alive for the duration of the test.
+    async fn start_test_server(sessions: SessionRegistry) -> (PathBuf, TempDir) {
         let dir = TempDir::new().unwrap();
         let socket_path = dir.path().join("test.sock");
-        std::mem::forget(dir);
         let path = socket_path.clone();
 
         tokio::spawn(async move {
@@ -539,13 +539,13 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
-        path
+        (path, dir)
     }
 
     #[tokio::test]
     async fn test_client_connect_and_create_session() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut client = Client::connect(&path).await.unwrap();
 
@@ -585,7 +585,7 @@ mod tests {
             .unwrap();
         sessions.monitor_child_exit("attach-me".to_string(), child_exit_rx);
 
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut client = Client::connect(&path).await.unwrap();
 
@@ -612,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_attach_nonexistent_session() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut client = Client::connect(&path).await.unwrap();
 
@@ -631,7 +631,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_list_sessions_empty() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut client = Client::connect(&path).await.unwrap();
         let list = client.list_sessions().await.unwrap();
@@ -652,7 +652,7 @@ mod tests {
         sessions.insert(Some("ls-test".to_string()), s).unwrap();
         sessions.monitor_child_exit("ls-test".to_string(), rx);
 
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut client = Client::connect(&path).await.unwrap();
         let list = client.list_sessions().await.unwrap();
@@ -674,7 +674,7 @@ mod tests {
         sessions.insert(Some("kill-test".to_string()), s).unwrap();
         sessions.monitor_child_exit("kill-test".to_string(), rx);
 
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut client = Client::connect(&path).await.unwrap();
         client.kill_session("kill-test").await.unwrap();
@@ -686,7 +686,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_kill_nonexistent_session() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut client = Client::connect(&path).await.unwrap();
         let result = client.kill_session("no-such").await;
@@ -698,7 +698,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_create_session_then_send_input() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut client = Client::connect(&path).await.unwrap();
 
@@ -857,7 +857,7 @@ mod tests {
         sessions.insert(Some("detach-test".to_string()), s).unwrap();
         sessions.monitor_child_exit("detach-test".to_string(), rx);
 
-        let path = start_test_server(sessions.clone()).await;
+        let (path, _dir) = start_test_server(sessions.clone()).await;
 
         let mut client = Client::connect(&path).await.unwrap();
         client.detach_session("detach-test").await.unwrap();
@@ -871,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_detach_nonexistent_session() {
         let sessions = SessionRegistry::new();
-        let path = start_test_server(sessions).await;
+        let (path, _dir) = start_test_server(sessions).await;
 
         let mut client = Client::connect(&path).await.unwrap();
         let result = client.detach_session("no-such").await;

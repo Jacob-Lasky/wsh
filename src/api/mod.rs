@@ -388,7 +388,7 @@ mod tests {
                 }],
                 false,
                 crate::overlay::ScreenMode::Normal,
-            );
+            ).unwrap();
         }
 
         let app = router(state, None);
@@ -421,7 +421,7 @@ mod tests {
         // Create an overlay
         let id = {
             let session = state.sessions.get("test").unwrap();
-            session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal)
+            session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap()
         };
 
         let app = router(state, None);
@@ -1562,7 +1562,7 @@ mod tests {
                 }],
                 false,
                 crate::overlay::ScreenMode::Normal,
-            );
+            ).unwrap();
         }
 
         // Create an overlay in alt mode
@@ -1576,7 +1576,7 @@ mod tests {
                 }],
                 false,
                 crate::overlay::ScreenMode::Alt,
-            );
+            ).unwrap();
         }
 
         let app = router(state.clone(), None);
@@ -1645,7 +1645,7 @@ mod tests {
                 }],
                 false,
                 crate::overlay::ScreenMode::Normal,
-            );
+            ).unwrap();
         }
 
         // Create a panel in alt mode
@@ -1662,7 +1662,7 @@ mod tests {
                 }],
                 false,
                 crate::overlay::ScreenMode::Alt,
-            );
+            ).unwrap();
         }
 
         let app = router(state.clone(), None);
