@@ -8,7 +8,7 @@ AI agents are crossing the line from assistants to coworkers — managing files,
 
 The implications land fast: orchestrator agents that launch fleets of AI coding tools in parallel terminal sessions, feed them tasks, and collect results. End-to-end automation that doesn't choke the moment a program asks a question. Live copilots that watch your session and render contextual help as overlays directly in your workflow -- true generative UI in the terminal. The terminal protocol survived fifty years because it's simple, universal, and composable. `wsh` doesn't replace it — it teaches AI to speak it, and makes every shell session AI-native.
 
-See [docs/VISION.md](docs/VISION.md) for the full project vision.
+`wsh`: offering HTTP, WebSocket, and MCP server APIs, as well as a full set of AI skills. See [docs/VISION.md](docs/VISION.md) for the full project vision.
 
 ## What This Enables
 
