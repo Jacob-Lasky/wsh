@@ -126,7 +126,8 @@ pub struct AwaitQuiesceParams {
     pub timeout_ms: u64,
     #[serde(default)]
     pub format: Format,
-    pub max_wait_ms: Option<u64>,
+    #[serde(default = "default_ws_max_wait")]
+    pub max_wait_ms: u64,
     /// Generation from a previous quiescence response. If provided and matches
     /// the current generation, the server waits for new activity before
     /// checking quiescence.
@@ -134,6 +135,10 @@ pub struct AwaitQuiesceParams {
     /// When true, always observe real silence for `timeout_ms` before responding.
     #[serde(default)]
     pub fresh: bool,
+}
+
+fn default_ws_max_wait() -> u64 {
+    30_000
 }
 
 fn default_interval() -> u64 {
@@ -1061,6 +1066,13 @@ mod tests {
         let params: SendInputParams = serde_json::from_value(raw).unwrap();
         assert_eq!(params.data, "aGVsbG8=");
         assert_eq!(params.encoding, InputEncoding::Base64);
+    }
+
+    #[test]
+    fn await_quiesce_params_defaults_max_wait() {
+        let json = r#"{"timeout_ms": 500}"#;
+        let params: AwaitQuiesceParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.max_wait_ms, 30_000);
     }
 
     #[test]

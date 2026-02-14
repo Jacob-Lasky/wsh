@@ -438,8 +438,8 @@ async fn handle_ws_json(
                                     let last_generation = params.last_generation;
                                     let fresh = params.fresh;
 
-                                    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>> = if let Some(max_wait) = params.max_wait_ms {
-                                        let deadline = std::time::Duration::from_millis(max_wait);
+                                    let deadline = std::time::Duration::from_millis(params.max_wait_ms);
+                                    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>> =
                                         Box::pin(async move {
                                             let inner = if fresh {
                                                 futures::future::Either::Left(activity.wait_for_fresh_quiescence(timeout))
@@ -449,19 +449,23 @@ async fn handle_ws_json(
                                             tokio::time::timeout(deadline, inner)
                                                 .await
                                                 .ok()
-                                        })
-                                    } else {
-                                        Box::pin(async move {
-                                            let gen = if fresh {
-                                                activity.wait_for_fresh_quiescence(timeout).await
-                                            } else {
-                                                activity.wait_for_quiescence(timeout, last_generation).await
-                                            };
-                                            Some(gen)
-                                        })
-                                    };
+                                        });
 
-                                    // Replace any pending quiesce
+                                    // If there's already a pending quiesce, cancel it with an error
+                                    // so the client doesn't hang waiting for a response.
+                                    if let Some((old_id, _, _)) = pending_quiesce.take() {
+                                        let resp = super::ws_methods::WsResponse::error(
+                                            old_id,
+                                            "await_quiesce",
+                                            "quiesce_superseded",
+                                            "A new await_quiesce request superseded this one.",
+                                        );
+                                        if let Ok(json) = serde_json::to_string(&resp) {
+                                            if ws_tx.send(Message::Text(json)).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
                                     pending_quiesce = Some((req.id.clone(), format, fut));
                                 }
                                 Err(e) => {
