@@ -465,6 +465,20 @@ impl SessionRegistry {
         inner.sessions.len()
     }
 
+    /// Remove all sessions, detaching streaming clients first.
+    ///
+    /// Called during server shutdown to ensure child processes are cleaned up
+    /// promptly (dropping the Session closes PTY handles, which sends SIGHUP
+    /// to the child).
+    pub fn drain(&self) {
+        let names = self.list();
+        for name in names {
+            if let Some(session) = self.remove(&name) {
+                session.detach();
+            }
+        }
+    }
+
     /// Subscribe to session lifecycle events.
     pub fn subscribe_events(&self) -> tokio_broadcast::Receiver<SessionEvent> {
         self.events_tx.subscribe()

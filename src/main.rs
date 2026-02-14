@@ -376,6 +376,10 @@ async fn run_server(
     // Give handlers a moment to flush close frames before stopping the server
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
+    // Detach all streaming clients and clean up sessions. Dropping
+    // sessions closes PTY handles, which sends SIGHUP to children.
+    sessions.drain();
+
     let _ = server_shutdown_tx.send(());
 
     // Wait for HTTP server to stop
