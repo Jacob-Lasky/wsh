@@ -223,13 +223,6 @@ async fn handle_ws_json(
     let mut quiesce_sub_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut quiesce_sub_format = crate::parser::state::Format::default();
 
-    // Connection ID for input capture ownership tracking
-    let connection_id = uuid::Uuid::new_v4().to_string();
-
-    // Track overlay/panel IDs created by this connection (for cleanup on disconnect)
-    let mut owned_overlay_ids: Vec<String> = Vec::new();
-    let mut owned_panel_ids: Vec<String> = Vec::new();
-
     // Ping/pong keepalive
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.reset();
@@ -555,36 +548,7 @@ async fn handle_ws_json(
                             }
                         } else {
                             // Dispatch all other methods
-                            let resp = super::ws_methods::dispatch(&req, &session, &connection_id).await;
-
-                            // Track overlay/panel ownership for cleanup on disconnect.
-                            if resp.error.is_none() {
-                                if req.method == "create_overlay" {
-                                    if let Some(result) = &resp.result {
-                                        if let Some(id) = result.get("id").and_then(|v| v.as_str()) {
-                                            owned_overlay_ids.push(id.to_string());
-                                        }
-                                    }
-                                } else if req.method == "create_panel" {
-                                    if let Some(result) = &resp.result {
-                                        if let Some(id) = result.get("id").and_then(|v| v.as_str()) {
-                                            owned_panel_ids.push(id.to_string());
-                                        }
-                                    }
-                                } else if req.method == "delete_overlay" {
-                                    if let Some(params) = &req.params {
-                                        if let Some(id) = params.get("id").and_then(|v| v.as_str()) {
-                                            owned_overlay_ids.retain(|oid| oid != id);
-                                        }
-                                    }
-                                } else if req.method == "delete_panel" {
-                                    if let Some(params) = &req.params {
-                                        if let Some(id) = params.get("id").and_then(|v| v.as_str()) {
-                                            owned_panel_ids.retain(|oid| oid != id);
-                                        }
-                                    }
-                                }
-                            }
+                            let resp = super::ws_methods::dispatch(&req, &session).await;
 
                             if let Ok(json) = serde_json::to_string(&resp) {
                                 if ws_tx.send(Message::Text(json)).await.is_err() {
@@ -611,32 +575,6 @@ async fn handle_ws_json(
                 }
             }
         }
-    }
-
-    // Auto-release input capture if this connection holds it.
-    if session.input_mode.is_capture() {
-        session.input_mode.release_if_owner(&connection_id);
-        if !session.input_mode.is_capture() {
-            session.focus.unfocus();
-            tracing::debug!("auto-released input capture on WS disconnect");
-        }
-    }
-
-    // Clean up overlays and panels created by this connection.
-    for id in &owned_overlay_ids {
-        session.overlays.delete(id);
-    }
-    for id in &owned_panel_ids {
-        session.panels.delete(id);
-    }
-    if !owned_overlay_ids.is_empty() || !owned_panel_ids.is_empty() {
-        tracing::debug!(
-            overlays = owned_overlay_ids.len(),
-            panels = owned_panel_ids.len(),
-            "cleaned up visual resources on WS disconnect"
-        );
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
-        let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
     }
 
     // Send close frame on any exit path (with timeout to avoid blocking on dead connections)
@@ -757,9 +695,6 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let (sub_tx, mut sub_rx) =
         tokio::sync::mpsc::channel::<TaggedSessionEvent>(256);
 
-    // Connection ID for input capture ownership tracking
-    let server_connection_id = uuid::Uuid::new_v4().to_string();
-
     // Track active subscription tasks by session name
     let mut sub_handles: std::collections::HashMap<String, SubHandle> =
         std::collections::HashMap::new();
@@ -799,7 +734,6 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                             &state,
                             &mut sub_handles,
                             &sub_tx,
-                            &server_connection_id,
                         )
                         .await;
 
@@ -942,7 +876,6 @@ async fn handle_server_ws_request(
     state: &AppState,
     sub_handles: &mut std::collections::HashMap<String, SubHandle>,
     sub_tx: &tokio::sync::mpsc::Sender<TaggedSessionEvent>,
-    connection_id: &str,
 ) -> Option<super::ws_methods::WsResponse> {
     let id = req.id.clone();
     let method = req.method.as_str();
@@ -1374,7 +1307,7 @@ async fn handle_server_ws_request(
         params: req.params.clone(),
     };
 
-    Some(super::ws_methods::dispatch(&ws_req, &session, connection_id).await)
+    Some(super::ws_methods::dispatch(&ws_req, &session).await)
 }
 
 // Quiescence query parameters
@@ -1978,36 +1911,21 @@ pub(super) async fn input_mode_get(
     }))
 }
 
-#[derive(Deserialize)]
-pub(super) struct InputCaptureParams {
-    pub owner: Option<String>,
-}
-
 pub(super) async fn input_capture(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<InputCaptureParams>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let owner = params.owner.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    session
-        .input_mode
-        .capture(&owner)
-        .map_err(|e| ApiError::InputCaptureFailed(e.to_string()))?;
+    session.input_mode.capture();
     Ok(StatusCode::NO_CONTENT)
 }
 
 pub(super) async fn input_release(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<InputCaptureParams>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let owner = params.owner.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    session
-        .input_mode
-        .release(&owner)
-        .map_err(|e| ApiError::InputCaptureFailed(e.to_string()))?;
+    session.input_mode.release();
     session.focus.unfocus();
     Ok(StatusCode::NO_CONTENT)
 }

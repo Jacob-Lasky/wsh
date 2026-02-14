@@ -39,8 +39,6 @@ pub enum ApiError {
     ParserTimeout,
     /// 503 - Maximum number of sessions reached.
     MaxSessionsReached,
-    /// 409 - Input capture is held by another connection.
-    InputCaptureFailed(String),
     /// 500 - Failed to write input to the PTY.
     InputSendFailed,
     /// 408 - Quiescence wait exceeded max_wait_ms deadline.
@@ -79,7 +77,6 @@ impl ApiError {
             ApiError::ParserUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::ParserTimeout => StatusCode::GATEWAY_TIMEOUT,
             ApiError::MaxSessionsReached => StatusCode::SERVICE_UNAVAILABLE,
-            ApiError::InputCaptureFailed(_) => StatusCode::CONFLICT,
             ApiError::InputSendFailed => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::QuiesceTimeout => StatusCode::REQUEST_TIMEOUT,
             ApiError::SessionCreateFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -109,7 +106,6 @@ impl ApiError {
             ApiError::ParserUnavailable => "parser_unavailable",
             ApiError::ParserTimeout => "parser_timeout",
             ApiError::MaxSessionsReached => "max_sessions_reached",
-            ApiError::InputCaptureFailed(_) => "input_capture_failed",
             ApiError::InputSendFailed => "input_send_failed",
             ApiError::QuiesceTimeout => "quiesce_timeout",
             ApiError::SessionCreateFailed(_) => "session_create_failed",
@@ -142,9 +138,6 @@ impl ApiError {
             ApiError::ParserTimeout => "Terminal parser query timed out.".to_string(),
             ApiError::MaxSessionsReached => {
                 "Maximum number of sessions reached.".to_string()
-            }
-            ApiError::InputCaptureFailed(detail) => {
-                format!("Input capture failed: {}.", detail)
             }
             ApiError::InputSendFailed => "Failed to send input to terminal.".to_string(),
             ApiError::QuiesceTimeout => {

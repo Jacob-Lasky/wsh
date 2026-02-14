@@ -953,14 +953,10 @@ impl WshMcpServer {
         if let Some(ref action) = params.mode {
             match action {
                 InputModeAction::Capture => {
-                    session.input_mode.capture("mcp").map_err(|e| {
-                        ErrorData::invalid_params(e.to_string(), None)
-                    })?;
+                    session.input_mode.capture();
                 }
                 InputModeAction::Release => {
-                    session.input_mode.release("mcp").map_err(|e| {
-                        ErrorData::invalid_params(e.to_string(), None)
-                    })?;
+                    session.input_mode.release();
                     session.focus.unfocus();
                 }
             }

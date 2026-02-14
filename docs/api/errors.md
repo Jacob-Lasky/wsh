@@ -48,7 +48,6 @@ change between versions.
 | Status | Code | Message | When |
 |--------|------|---------|------|
 | `409` | `session_name_conflict` | Session name already exists: {name}. | Session name already in use |
-| `409` | `input_capture_failed` | Input capture failed: {detail}. | Input capture/release rejected (another owner holds the capture) |
 
 ### Not Found Errors (Sessions)
 

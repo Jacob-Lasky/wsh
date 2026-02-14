@@ -469,13 +469,13 @@ mod tests {
         let (state, _input_rx, _name) = create_test_state();
         let app = router(state, None);
 
-        // Switch to capture mode (with explicit owner so release can match)
+        // Switch to capture mode
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/sessions/test/input/capture?owner=test-agent")
+                    .uri("/sessions/test/input/capture")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -502,13 +502,13 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["mode"], "capture");
 
-        // Switch back to passthrough mode (same owner)
+        // Switch back to passthrough mode
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/sessions/test/input/release?owner=test-agent")
+                    .uri("/sessions/test/input/release")
                     .body(Body::empty())
                     .unwrap(),
             )

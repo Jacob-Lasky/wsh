@@ -358,7 +358,7 @@ fn parse_params<T: serde::de::DeserializeOwned>(req: &WsRequest) -> Result<T, Ws
 }
 
 /// Dispatch a WebSocket request to the appropriate handler.
-pub async fn dispatch(req: &WsRequest, session: &Session, owner: &str) -> WsResponse {
+pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
     let id = req.id.clone();
     let method = req.method.as_str();
 
@@ -367,17 +367,15 @@ pub async fn dispatch(req: &WsRequest, session: &Session, owner: &str) -> WsResp
             let mode = session.input_mode.get();
             WsResponse::success(id, method, serde_json::json!({ "mode": mode }))
         }
-        "capture_input" => match session.input_mode.capture(owner) {
-            Ok(()) => WsResponse::success(id, method, serde_json::json!({})),
-            Err(e) => WsResponse::error(id, method, "input_capture_failed", &e.to_string()),
-        },
-        "release_input" => match session.input_mode.release(owner) {
-            Ok(()) => {
-                session.focus.unfocus();
-                WsResponse::success(id, method, serde_json::json!({}))
-            }
-            Err(e) => WsResponse::error(id, method, "input_capture_failed", &e.to_string()),
-        },
+        "capture_input" => {
+            session.input_mode.capture();
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
+        "release_input" => {
+            session.input_mode.release();
+            session.focus.unfocus();
+            WsResponse::success(id, method, serde_json::json!({}))
+        }
         "focus" => {
             let params: FocusParams = match parse_params(req) {
                 Ok(p) => p,
@@ -1143,7 +1141,7 @@ mod tests {
             method: "do_magic".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "unknown_method");
         assert_eq!(json["method"], "do_magic");
@@ -1157,7 +1155,7 @@ mod tests {
             method: "get_input_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["id"], 1);
         assert_eq!(json["method"], "get_input_mode");
@@ -1174,7 +1172,7 @@ mod tests {
             method: "capture_input".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Verify mode changed
@@ -1183,7 +1181,7 @@ mod tests {
             method: "get_input_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "capture");
 
@@ -1193,7 +1191,7 @@ mod tests {
             method: "release_input".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Verify
@@ -1202,7 +1200,7 @@ mod tests {
             method: "get_input_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "passthrough");
     }
@@ -1215,7 +1213,7 @@ mod tests {
             method: "list_overlays".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"], serde_json::json!([]));
     }
@@ -1231,7 +1229,7 @@ mod tests {
             method: "clear_overlays".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
         assert_eq!(session.overlays.list().len(), 0);
     }
@@ -1244,7 +1242,7 @@ mod tests {
             method: "get_screen".to_string(),
             params: Some(serde_json::json!({"format": "plain"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["cols"].is_number());
         assert!(json["result"]["rows"].is_number());
@@ -1259,7 +1257,7 @@ mod tests {
             method: "get_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["cols"].is_number());
     }
@@ -1272,7 +1270,7 @@ mod tests {
             method: "get_scrollback".to_string(),
             params: Some(serde_json::json!({"format": "plain", "offset": 0, "limit": 10})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["total_lines"].is_number());
         assert!(json["result"]["lines"].is_array());
@@ -1286,7 +1284,7 @@ mod tests {
             method: "send_input".to_string(),
             params: Some(serde_json::json!({"data": "hello"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
 
@@ -1304,7 +1302,7 @@ mod tests {
             method: "send_input".to_string(),
             params: Some(serde_json::json!({"data": encoded, "encoding": "base64"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
 
@@ -1320,7 +1318,7 @@ mod tests {
             method: "send_input".to_string(),
             params: Some(serde_json::json!({"data": "!!!not-base64!!!", "encoding": "base64"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "invalid_request");
     }
@@ -1336,7 +1334,7 @@ mod tests {
                 "spans": [{"text": "Hello"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["id"].is_string());
         assert_eq!(session.overlays.list().len(), 1);
@@ -1354,7 +1352,7 @@ mod tests {
             method: "get_overlay".to_string(),
             params: Some(serde_json::json!({"id": id})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["x"], 5);
         assert_eq!(json["result"]["y"], 10);
@@ -1368,7 +1366,7 @@ mod tests {
             method: "get_overlay".to_string(),
             params: Some(serde_json::json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
@@ -1385,7 +1383,7 @@ mod tests {
             method: "update_overlay".to_string(),
             params: Some(serde_json::json!({"id": id, "spans": [{"text": "New"}]})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&id).unwrap();
@@ -1401,7 +1399,7 @@ mod tests {
             method: "patch_overlay".to_string(),
             params: Some(serde_json::json!({"id": id, "x": 20, "y": 30})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&id).unwrap();
@@ -1418,7 +1416,7 @@ mod tests {
             method: "delete_overlay".to_string(),
             params: Some(serde_json::json!({"id": id})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert!(session.overlays.get(&id).is_none());
@@ -1432,7 +1430,7 @@ mod tests {
             method: "delete_overlay".to_string(),
             params: Some(serde_json::json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
@@ -1449,7 +1447,7 @@ mod tests {
             method: "list_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"], serde_json::json!([]));
     }
@@ -1466,7 +1464,7 @@ mod tests {
                 "spans": [{"text": "Status"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["id"].is_string());
         assert_eq!(json["id"], 1);
@@ -1493,7 +1491,7 @@ mod tests {
             method: "get_panel".to_string(),
             params: Some(json!({"id": panel_id})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["position"], "top");
         assert_eq!(json["result"]["height"], 1);
@@ -1508,7 +1506,7 @@ mod tests {
             method: "get_panel".to_string(),
             params: Some(json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1537,7 +1535,7 @@ mod tests {
                 "spans": [{"text": "Updated"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let updated = session.panels.get(&panel_id).unwrap();
@@ -1560,7 +1558,7 @@ mod tests {
                 "spans": []
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1585,7 +1583,7 @@ mod tests {
                 "height": 5
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let patched = session.panels.get(&panel_id).unwrap();
@@ -1601,7 +1599,7 @@ mod tests {
             method: "patch_panel".to_string(),
             params: Some(json!({"id": "nonexistent", "height": 2})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1624,7 +1622,7 @@ mod tests {
             method: "delete_panel".to_string(),
             params: Some(json!({"id": panel_id})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert!(session.panels.get(&panel_id).is_none());
@@ -1638,7 +1636,7 @@ mod tests {
             method: "delete_panel".to_string(),
             params: Some(json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1655,7 +1653,7 @@ mod tests {
             method: "clear_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert_eq!(session.panels.list().len(), 0);
@@ -1681,7 +1679,7 @@ mod tests {
             method: "list_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let panels = json["result"].as_array().unwrap();
         assert_eq!(panels.len(), 1);
@@ -1710,7 +1708,7 @@ mod tests {
                 "spans": [{"id": "lbl", "text": "New"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&oid).unwrap();
@@ -1725,7 +1723,7 @@ mod tests {
             method: "update_overlay_spans".to_string(),
             params: Some(json!({"id": "nonexistent", "spans": []})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
@@ -1742,7 +1740,7 @@ mod tests {
                 "writes": [{"row": 0, "col": 0, "text": "X"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&oid).unwrap();
@@ -1758,7 +1756,7 @@ mod tests {
             method: "overlay_region_write".to_string(),
             params: Some(json!({"id": "nonexistent", "writes": []})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
@@ -1787,7 +1785,7 @@ mod tests {
                 "spans": [{"id": "tag", "text": "Updated"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let panel = session.panels.get(&pid).unwrap();
@@ -1802,7 +1800,7 @@ mod tests {
             method: "update_panel_spans".to_string(),
             params: Some(json!({"id": "nonexistent", "spans": []})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1827,7 +1825,7 @@ mod tests {
                 "writes": [{"row": 1, "col": 2, "text": "Y"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let panel = session.panels.get(&pid).unwrap();
@@ -1845,7 +1843,7 @@ mod tests {
             method: "panel_region_write".to_string(),
             params: Some(json!({"id": "nonexistent", "writes": []})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1870,7 +1868,7 @@ mod tests {
                 "writes": [{"row": 2, "col": 0, "text": "Cell"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&oid).unwrap();
@@ -1905,7 +1903,7 @@ mod tests {
                 "writes": [{"row": 1, "col": 0, "text": "Row data"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let panel = session.panels.get(&pid).unwrap();
@@ -1926,7 +1924,7 @@ mod tests {
                 "spans": []
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "overlay_not_found");
     }
@@ -1943,7 +1941,7 @@ mod tests {
                 "spans": []
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "panel_not_found");
     }
@@ -1967,7 +1965,7 @@ mod tests {
                 "spans": [{"id": "a", "text": "B"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&oid).unwrap();
@@ -1988,7 +1986,7 @@ mod tests {
                 "writes": [{"row": 0, "col": 0, "text": "Z"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         let overlay = session.overlays.get(&oid).unwrap();
@@ -2008,7 +2006,7 @@ mod tests {
             method: "get_focus".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"]["focused"].is_null());
     }
@@ -2022,7 +2020,7 @@ mod tests {
             method: "focus".to_string(),
             params: Some(json!({"id": oid})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert_eq!(session.focus.focused(), Some(oid));
@@ -2037,7 +2035,7 @@ mod tests {
             method: "focus".to_string(),
             params: Some(json!({"id": oid})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "not_focusable");
     }
@@ -2050,7 +2048,7 @@ mod tests {
             method: "focus".to_string(),
             params: Some(json!({"id": "nonexistent"})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "invalid_request");
     }
@@ -2072,7 +2070,7 @@ mod tests {
             method: "focus".to_string(),
             params: Some(json!({"id": pid})),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert_eq!(session.focus.focused(), Some(pid));
@@ -2090,7 +2088,7 @@ mod tests {
             method: "unfocus".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert!(session.focus.focused().is_none());
@@ -2107,7 +2105,7 @@ mod tests {
             method: "get_focus".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["focused"], oid);
     }
@@ -2124,7 +2122,7 @@ mod tests {
             method: "get_screen_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "normal");
     }
@@ -2137,7 +2135,7 @@ mod tests {
             method: "enter_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert_eq!(*session.screen_mode.read(), crate::overlay::ScreenMode::Alt);
@@ -2153,7 +2151,7 @@ mod tests {
             method: "enter_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "already_in_alt_screen");
     }
@@ -2168,7 +2166,7 @@ mod tests {
             method: "exit_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["result"].is_object());
         assert_eq!(*session.screen_mode.read(), crate::overlay::ScreenMode::Normal);
@@ -2183,7 +2181,7 @@ mod tests {
             method: "exit_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "not_in_alt_screen");
     }
@@ -2198,7 +2196,7 @@ mod tests {
             method: "get_screen_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "normal");
 
@@ -2208,7 +2206,7 @@ mod tests {
             method: "enter_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Verify mode is alt
@@ -2217,7 +2215,7 @@ mod tests {
             method: "get_screen_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "alt");
 
@@ -2227,7 +2225,7 @@ mod tests {
             method: "exit_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Verify mode is normal again
@@ -2236,7 +2234,7 @@ mod tests {
             method: "get_screen_mode".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["result"]["mode"], "normal");
     }
@@ -2260,7 +2258,7 @@ mod tests {
             method: "list_overlays".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let overlays = json["result"].as_array().unwrap();
         assert_eq!(overlays.len(), 1);
@@ -2269,7 +2267,7 @@ mod tests {
         *session.screen_mode.write() = crate::overlay::ScreenMode::Normal;
 
         // list_overlays should only return normal-mode overlays
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let overlays = json["result"].as_array().unwrap();
         assert_eq!(overlays.len(), 1);
@@ -2310,7 +2308,7 @@ mod tests {
             method: "list_panels".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let panels = json["result"].as_array().unwrap();
         assert_eq!(panels.len(), 1);
@@ -2319,7 +2317,7 @@ mod tests {
         *session.screen_mode.write() = crate::overlay::ScreenMode::Normal;
 
         // list_panels should only return normal-mode panels
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let panels = json["result"].as_array().unwrap();
         assert_eq!(panels.len(), 1);
@@ -2341,7 +2339,7 @@ mod tests {
                 "spans": [{"text": "Alt overlay"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let overlay_id = json["result"]["id"].as_str().unwrap().to_string();
 
@@ -2367,7 +2365,7 @@ mod tests {
                 "spans": [{"text": "Alt panel"}]
             })),
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         let panel_id = json["result"]["id"].as_str().unwrap().to_string();
 
@@ -2400,7 +2398,7 @@ mod tests {
             method: "exit_alt_screen".to_string(),
             params: None,
         };
-        let resp = dispatch(&req, &session, "test").await;
+        let resp = dispatch(&req, &session).await;
         assert!(serde_json::to_value(&resp).unwrap()["result"].is_object());
 
         // Alt elements should be deleted, normal elements preserved
