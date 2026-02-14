@@ -465,6 +465,20 @@ impl SessionRegistry {
         inner.sessions.len()
     }
 
+    /// Check if a given name is available (not already in use).
+    ///
+    /// Returns `Ok(())` if the name is `None` (auto-assign) or the name is free.
+    /// Returns `Err(RegistryError::NameExists)` if the name is taken.
+    pub fn name_available(&self, name: &Option<String>) -> Result<(), RegistryError> {
+        if let Some(n) = name {
+            let inner = self.inner.read();
+            if inner.sessions.contains_key(n) {
+                return Err(RegistryError::NameExists(n.clone()));
+            }
+        }
+        Ok(())
+    }
+
     /// Remove all sessions, detaching streaming clients first.
     ///
     /// Called during server shutdown to ensure child processes are cleaned up

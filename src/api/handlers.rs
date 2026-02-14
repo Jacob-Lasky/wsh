@@ -1933,6 +1933,15 @@ pub(super) async fn session_create(
     let rows = req.rows.unwrap_or(24);
     let cols = req.cols.unwrap_or(80);
 
+    // Pre-check name availability to avoid spawning a PTY that would be
+    // immediately discarded on name conflict. This is a TOCTOU hint (the
+    // name could be taken between the check and the insert), but insert()
+    // will catch that and we only waste a PTY in the rare race case.
+    state.sessions.name_available(&req.name).map_err(|e| match e {
+        RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
+        RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
+    })?;
+
     // Use a placeholder name for spawn; registry.insert will assign the real name.
     let (session, child_exit_rx) =
         Session::spawn_with_options("".to_string(), command, rows, cols, req.cwd, req.env)

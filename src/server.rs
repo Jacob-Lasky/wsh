@@ -156,6 +156,10 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         None => SpawnCommand::default(),
     };
 
+    sessions.name_available(&msg.name).map_err(|e| {
+        io::Error::new(io::ErrorKind::AlreadyExists, e.to_string())
+    })?;
+
     let (session, child_exit_rx) = Session::spawn_with_options(
         msg.name.clone().unwrap_or_default(),
         command,

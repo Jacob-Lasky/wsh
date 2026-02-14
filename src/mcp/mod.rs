@@ -146,6 +146,17 @@ impl WshMcpServer {
         let rows = params.rows.unwrap_or(24);
         let cols = params.cols.unwrap_or(80);
 
+        self.state.sessions.name_available(&params.name).map_err(|e| match e {
+            RegistryError::NameExists(n) => ErrorData::invalid_params(
+                format!("session name already exists: {n}"),
+                None,
+            ),
+            RegistryError::NotFound(n) => ErrorData::internal_error(
+                format!("unexpected registry error: {n}"),
+                None,
+            ),
+        })?;
+
         let (session, child_exit_rx) =
             Session::spawn_with_options("".to_string(), command, rows, cols, params.cwd, params.env)
                 .map_err(|e| {
