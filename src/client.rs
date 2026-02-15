@@ -335,12 +335,17 @@ impl Client {
 /// `sigwinch_rx`. Terminal output (PTY data, overlays, panels) is written to
 /// `output`, which is `stdout` in production and a buffer in tests.
 async fn streaming_loop(
-    mut reader: ReadHalf<UnixStream>,
+    reader: ReadHalf<UnixStream>,
     mut writer: WriteHalf<UnixStream>,
     stdin_rx: &mut tokio::sync::mpsc::Receiver<Bytes>,
     sigwinch_rx: &mut tokio::sync::mpsc::Receiver<(u16, u16)>,
     output: &mut impl std::io::Write,
 ) -> io::Result<()> {
+    // BufReader preserves partially-read bytes across select! cancellation,
+    // making Frame::read_from cancellation-safe. Without this, if a select!
+    // branch cancels read_from between the header and payload reads, the
+    // next read would interpret payload bytes as a header, corrupting the stream.
+    let mut reader = tokio::io::BufReader::new(reader);
     // Ctrl+\ double-tap detection for detach.
     // Each Ctrl+\ is forwarded to the server immediately (the server toggles
     // input capture mode). If a second Ctrl+\ arrives within the timeout,

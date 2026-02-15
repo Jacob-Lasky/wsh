@@ -637,24 +637,58 @@ impl SessionRegistry {
     /// `SessionEvent::Destroyed` event). This should be called for
     /// API-created sessions where the caller would otherwise discard the
     /// exit receiver.
+    ///
+    /// Uses `Arc::ptr_eq` on the session's `client_count` as a stable identity
+    /// marker, so this works correctly even if the session is renamed between
+    /// spawn and child exit.
     pub fn monitor_child_exit(
         &self,
         name: String,
         child_exit_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
         let registry = self.clone();
+        // Capture the session's client_count Arc as a stable identity marker.
+        // Session clones share the same Arc, so Arc::ptr_eq identifies the
+        // same logical session even after rename. The name is only used as
+        // a fast-path check and log context.
+        let identity = registry
+            .get(&name)
+            .map(|s| Arc::clone(&s.client_count));
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
-            tracing::info!(session = %name, "session child process exited");
+            // Look up the session's current name by stable identity
+            let current_name = match &identity {
+                Some(id) => registry.find_name_by_identity(id).or(Some(name.clone())),
+                None => Some(name.clone()),
+            };
+            let display_name = current_name.as_deref().unwrap_or(&name);
+            tracing::info!(session = %display_name, "session child process exited");
             // Signal all attached streaming clients to detach before removing
             // the session. Without this, socket streaming loops would block
             // forever on output_rx.recv() because the Session holds a
             // broadcast::Sender clone that keeps the channel open.
-            if let Some(session) = registry.get(&name) {
-                session.detach();
+            if let Some(ref name) = current_name {
+                if let Some(session) = registry.get(name) {
+                    session.detach();
+                }
+                registry.remove(name);
             }
-            registry.remove(&name);
         });
+    }
+
+    /// Find a session's current name by identity (Arc pointer equality).
+    ///
+    /// Used by `monitor_child_exit` to locate a session that may have been
+    /// renamed since the monitor was started. The `client_count` Arc is shared
+    /// across all clones of the same Session, making it a stable identity marker.
+    fn find_name_by_identity(&self, identity: &Arc<AtomicUsize>) -> Option<String> {
+        let inner = self.inner.read();
+        for (name, session) in &inner.sessions {
+            if Arc::ptr_eq(identity, &session.client_count) {
+                return Some(name.clone());
+            }
+        }
+        None
     }
 }
 

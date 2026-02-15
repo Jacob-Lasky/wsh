@@ -29,9 +29,10 @@ use super::error::ApiError;
 use super::{get_session, AppState};
 
 /// WebSocket send timeout. If a send takes longer than this, the client is
-/// considered dead and the connection is closed. Prevents a slow/stalled
-/// client from blocking the handler's select! loop indefinitely.
-const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// considered dead and the connection is closed. Kept short (5s) to minimize
+/// the time a slow/stalled client can freeze the handler's select! loop
+/// (blocking ping/pong, quiescence, shutdown, and client messages).
+const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Pending await_quiesce state: (request_id, format, future resolving to generation or None on timeout)
 type PendingQuiesce = (
@@ -317,6 +318,24 @@ async fn handle_ws_json(
                         if let Ok(json) = serde_json::to_string(&lag_msg) {
                             ws_send!(ws_tx, Message::Text(json));
                         }
+                        // After lag, push a full sync so the client can recover.
+                        // Without this, the client has an incomplete view of state.
+                        if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            session.parser.query(crate::parser::state::Query::Screen {
+                                format: crate::parser::state::Format::default(),
+                            }),
+                        ).await {
+                            let scrollback_lines = screen.total_lines;
+                            let sync_event = crate::parser::events::Event::Sync {
+                                seq: 0,
+                                screen,
+                                scrollback_lines,
+                            };
+                            if let Ok(json) = serde_json::to_string(&sync_event) {
+                                ws_send!(ws_tx, Message::Text(json));
+                            }
+                        }
                     }
                     None => break,
                     _ => {} // No subscription active, discard
@@ -357,12 +376,11 @@ async fn handle_ws_json(
             } => {
                 let (req_id, format, _) = pending_quiesce.take().unwrap();
                 if let Some(generation) = result {
-                    // Quiescent — query screen and return
-                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
-                        .parser
-                        .query(crate::parser::state::Query::Screen { format })
-                        .await
-                    {
+                    // Quiescent — query screen and return (with timeout to avoid blocking the loop)
+                    if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        session.parser.query(crate::parser::state::Query::Screen { format }),
+                    ).await {
                         let scrollback_lines = screen.total_lines;
                         let resp = super::ws_methods::WsResponse::success(
                             req_id,
@@ -400,12 +418,11 @@ async fn handle_ws_json(
             } => {
                 match signal {
                     Some(()) => {
-                        // Emit a sync event
-                        if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
-                            .parser
-                            .query(crate::parser::state::Query::Screen { format: quiesce_sub_format })
-                            .await
-                        {
+                        // Emit a sync event (with timeout to avoid blocking the loop)
+                        if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            session.parser.query(crate::parser::state::Query::Screen { format: quiesce_sub_format }),
+                        ).await {
                             let scrollback_lines = screen.total_lines;
                             let sync_event = crate::parser::events::Event::Sync {
                                 seq: 0,
@@ -515,12 +532,11 @@ async fn handle_ws_json(
                                         ws_send!(ws_tx, Message::Text(json));
                                     }
 
-                                    // Send sync event
-                                    if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
-                                        .parser
-                                        .query(crate::parser::state::Query::Screen { format: sub_format })
-                                        .await
-                                    {
+                                    // Send sync event (with timeout to avoid blocking the loop)
+                                    if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                                        std::time::Duration::from_secs(10),
+                                        session.parser.query(crate::parser::state::Query::Screen { format: sub_format }),
+                                    ).await {
                                         let scrollback_lines = screen.total_lines;
                                         let sync_event = crate::parser::events::Event::Sync {
                                             seq: 0,
@@ -817,11 +833,10 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                                                 .map(|p| p.format)
                                                 .unwrap_or_default()
                                         };
-                                        if let Ok(crate::parser::state::QueryResponse::Screen(screen)) = session
-                                            .parser
-                                            .query(crate::parser::state::Query::Screen { format })
-                                            .await
-                                        {
+                                        if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                                            std::time::Duration::from_secs(10),
+                                            session.parser.query(crate::parser::state::Query::Screen { format }),
+                                        ).await {
                                             let scrollback_lines = screen.total_lines;
                                             let sync_event = serde_json::json!({
                                                 "event": "sync",
@@ -1123,7 +1138,7 @@ async fn handle_server_ws_request(
 
             match state.sessions.remove(&params.name) {
                 Some(session) => {
-                    session.detach();
+                    session.force_kill();
                     // Also clean up any subscription for this session
                     if let Some(handle) = sub_handles.remove(&params.name) {
                         handle.task.abort();

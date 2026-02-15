@@ -478,15 +478,25 @@ async fn run_mcp(
 
     let socket_path = socket.unwrap_or_else(server::default_socket_path);
 
-    // Connect to existing server or spawn one
+    // Connect to existing server or spawn one (with file lock to prevent races)
     match client::Client::connect(&socket_path).await {
         Ok(_) => {
             tracing::debug!("connected to existing server");
         }
         Err(_) => {
-            tracing::debug!("no server running, spawning daemon");
-            spawn_server_daemon(&socket_path, &bind, token.as_deref())?;
-            wait_for_socket(&socket_path).await?;
+            let lock_path = socket_path.with_extension("lock");
+            let _lock = acquire_spawn_lock(&lock_path)?;
+            // Re-check after lock
+            match client::Client::connect(&socket_path).await {
+                Ok(_) => {
+                    tracing::debug!("connected to server (spawned by another client)");
+                }
+                Err(_) => {
+                    tracing::debug!("no server running, spawning daemon");
+                    spawn_server_daemon(&socket_path, &bind, token.as_deref())?;
+                    wait_for_socket(&socket_path).await?;
+                }
+            }
         }
     }
 
@@ -642,6 +652,41 @@ async fn run_mcp(
 
 // ── Default mode (no subcommand) ───────────────────────────────────
 
+/// Acquire an advisory file lock to serialize connect-or-spawn sequences.
+///
+/// Returns a `File` that holds the lock (lock released on drop). Uses
+/// `LOCK_EX` (blocking) with a short timeout via `LOCK_NB` + retry to
+/// avoid infinite waits.
+fn acquire_spawn_lock(lock_path: &std::path::Path) -> Result<std::fs::File, WshError> {
+    use std::os::unix::io::AsRawFd;
+
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(WshError::Io)?;
+
+    // Try non-blocking first, then retry with short sleeps (up to 5s)
+    for _ in 0..50 {
+        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if ret == 0 {
+            return Ok(file);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Final blocking attempt
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if ret != 0 {
+        return Err(WshError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(file)
+}
+
 /// Spawn a wsh server daemon as a background process.
 ///
 /// The spawned server runs in ephemeral mode (exits when last session ends).
@@ -715,20 +760,36 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
 
     let socket_path = server::default_socket_path();
 
-    // Try connecting to an existing server; if none, spawn one
+    // Try connecting to an existing server; if none, spawn one.
+    // Uses an advisory file lock to prevent two clients from racing to spawn
+    // duplicate daemons (TOCTOU between connect-fail and spawn).
     let mut c = match client::Client::connect(&socket_path).await {
         Ok(c) => {
             tracing::debug!("connected to existing server");
             c
         }
         Err(_) => {
-            tracing::debug!("no server running, spawning daemon");
-            spawn_server_daemon(&socket_path, &cli.bind, None)?;
-            wait_for_socket(&socket_path).await?;
-            client::Client::connect(&socket_path).await.map_err(|e| {
-                eprintln!("wsh: failed to connect to server after spawn: {}", e);
-                WshError::Io(e)
-            })?
+            tracing::debug!("no server running, acquiring spawn lock");
+            let lock_path = socket_path.with_extension("lock");
+            let _lock = acquire_spawn_lock(&lock_path)?;
+
+            // Re-check after acquiring the lock — another client may have
+            // spawned the server while we waited.
+            match client::Client::connect(&socket_path).await {
+                Ok(c) => {
+                    tracing::debug!("connected to server (spawned by another client)");
+                    c
+                }
+                Err(_) => {
+                    tracing::debug!("spawning daemon");
+                    spawn_server_daemon(&socket_path, &cli.bind, None)?;
+                    wait_for_socket(&socket_path).await?;
+                    client::Client::connect(&socket_path).await.map_err(|e| {
+                        eprintln!("wsh: failed to connect to server after spawn: {}", e);
+                        WshError::Io(e)
+                    })?
+                }
+            }
         }
     };
 

@@ -27,17 +27,28 @@ pub async fn serve(
     socket_path: &Path,
     cancel: tokio_util::sync::CancellationToken,
 ) -> io::Result<()> {
-    // Remove stale socket file if it exists, but check for active server first
+    // Remove stale socket file if it exists, but check for active server first.
+    // Uses spawn_blocking to avoid blocking the tokio runtime on the connect() syscall
+    // (which could hang if the socket connects to a process that is alive but unresponsive).
     if socket_path.exists() {
-        match std::os::unix::net::UnixStream::connect(socket_path) {
-            Ok(_) => {
+        let path_owned = socket_path.to_path_buf();
+        let is_active = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::task::spawn_blocking(move || {
+                std::os::unix::net::UnixStream::connect(&path_owned).is_ok()
+            }),
+        )
+        .await;
+
+        match is_active {
+            Ok(Ok(true)) => {
                 return Err(io::Error::new(
                     io::ErrorKind::AddrInUse,
                     format!("another server is already listening on {}", socket_path.display()),
                 ));
             }
-            Err(_) => {
-                // Socket exists but no server is listening — stale, safe to remove
+            _ => {
+                // Socket exists but no server is listening (or check timed out) — stale, safe to remove
                 std::fs::remove_file(socket_path)?;
             }
         }
@@ -577,7 +588,11 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "socket client lagged on output, skipping missed frames");
+                        tracing::warn!(skipped = n, "socket client lagged on output, disconnecting for re-sync");
+                        // Disconnect the client so it can reconnect and get full state
+                        // via the attach response. Continuing after lag would leave the
+                        // client with an incomplete view of terminal state.
+                        break;
                     }
                 }
             }

@@ -4,6 +4,10 @@ use crate::overlay::{OverlaySpan, RegionWrite};
 use crate::parser::events::EventType;
 use crate::parser::state::{Format, Query};
 
+/// Timeout for parser queries inside WebSocket dispatch. Prevents a stalled
+/// parser from blocking the WS handler's select! loop indefinitely.
+const PARSER_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 // ---------------------------------------------------------------------------
 // Envelope types
 // ---------------------------------------------------------------------------
@@ -515,17 +519,26 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match session.parser.query(Query::Screen { format: params.format }).await {
-                Ok(resp) => WsResponse::success(
+            match tokio::time::timeout(
+                PARSER_QUERY_TIMEOUT,
+                session.parser.query(Query::Screen { format: params.format }),
+            ).await {
+                Ok(Ok(resp)) => WsResponse::success(
                     id,
                     method,
                     serde_json::to_value(&resp).unwrap(),
                 ),
-                Err(_) => WsResponse::error(
+                Ok(Err(_)) => WsResponse::error(
                     id,
                     method,
                     "parser_unavailable",
                     "Terminal parser is unavailable.",
+                ),
+                Err(_) => WsResponse::error(
+                    id,
+                    method,
+                    "parser_timeout",
+                    "Parser query timed out.",
                 ),
             }
         }
@@ -534,25 +547,30 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            match session
-                .parser
-                .query(Query::Scrollback {
+            match tokio::time::timeout(
+                PARSER_QUERY_TIMEOUT,
+                session.parser.query(Query::Scrollback {
                     format: params.format,
                     offset: params.offset,
                     limit: params.limit.min(10_000),
-                })
-                .await
-            {
-                Ok(resp) => WsResponse::success(
+                }),
+            ).await {
+                Ok(Ok(resp)) => WsResponse::success(
                     id,
                     method,
                     serde_json::to_value(&resp).unwrap(),
                 ),
-                Err(_) => WsResponse::error(
+                Ok(Err(_)) => WsResponse::error(
                     id,
                     method,
                     "parser_unavailable",
                     "Terminal parser is unavailable.",
+                ),
+                Err(_) => WsResponse::error(
+                    id,
+                    method,
+                    "parser_timeout",
+                    "Parser query timed out.",
                 ),
             }
         }

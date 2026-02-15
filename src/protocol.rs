@@ -122,11 +122,12 @@ impl Frame {
 
     /// Read a frame from an async reader.
     ///
-    /// The 5-byte header (type + length) is read in a single `read_exact`
-    /// call, making this method cancellation-safe for use in `select!` loops
-    /// *as long as the caller never re-reads from the same reader after
-    /// cancellation*. If the header read is interrupted mid-way and the
-    /// caller retries, the reader will be in an inconsistent state.
+    /// **Cancellation safety:** This method performs two sequential `read_exact`
+    /// calls (5-byte header, then payload). It is NOT cancellation-safe on bare
+    /// `AsyncRead` streams — if cancelled between reads, subsequent reads will
+    /// be desynchronized. Callers using this in `select!` loops MUST wrap the
+    /// reader in `tokio::io::BufReader`, which preserves partially-read bytes
+    /// across cancellation and makes this method safe to retry.
     pub async fn read_from<R: AsyncReadExt + Unpin>(reader: &mut R) -> io::Result<Self> {
         let mut header = [0u8; 5];
         reader.read_exact(&mut header).await?;

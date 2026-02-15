@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bytes::Bytes;
+use parking_lot::Mutex;
 use tokio::sync::{broadcast, mpsc};
 
 pub const BROADCAST_CAPACITY: usize = 64;
@@ -53,7 +54,6 @@ impl Broker {
     pub fn subscribe_parser(&self) -> (mpsc::Sender<Bytes>, mpsc::Receiver<Bytes>) {
         let rx = self.parser_rx
             .lock()
-            .expect("parser_rx mutex poisoned")
             .take()
             .expect("subscribe_parser() called more than once");
         (self.parser_tx.clone(), rx)
