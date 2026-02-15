@@ -9,6 +9,32 @@ use super::types::{Panel, PanelId, Position};
 
 const MAX_PANELS: usize = 256;
 const MAX_SPANS_PER_PANEL: usize = 4096;
+const MAX_REGION_WRITES: usize = 4096;
+const MAX_TEXT_BYTES: usize = 65_536; // 64 KB per span/write
+
+fn validate_spans(spans: &[OverlaySpan]) -> Result<(), &'static str> {
+    if spans.len() > MAX_SPANS_PER_PANEL {
+        return Err("too many spans");
+    }
+    for span in spans {
+        if span.text.len() > MAX_TEXT_BYTES {
+            return Err("span text too large");
+        }
+    }
+    Ok(())
+}
+
+fn validate_region_writes(writes: &[RegionWrite]) -> Result<(), &'static str> {
+    if writes.len() > MAX_REGION_WRITES {
+        return Err("too many region writes");
+    }
+    for w in writes {
+        if w.text.len() > MAX_TEXT_BYTES {
+            return Err("region write text too large");
+        }
+    }
+    Ok(())
+}
 
 /// Thread-safe store for panels
 #[derive(Clone)]
@@ -47,9 +73,7 @@ impl PanelStore {
         if inner.panels.len() >= MAX_PANELS {
             return Err("maximum panel count reached");
         }
-        if spans.len() > MAX_SPANS_PER_PANEL {
-            return Err("too many spans");
-        }
+        validate_spans(&spans)?;
         let id = Uuid::new_v4().to_string();
         let z = z.unwrap_or_else(|| {
             let z = inner.next_z;
@@ -97,13 +121,14 @@ impl PanelStore {
     }
 
     /// Update a panel's spans (full replacement)
-    pub fn update(&self, id: &str, spans: Vec<OverlaySpan>) -> bool {
+    pub fn update(&self, id: &str, spans: Vec<OverlaySpan>) -> Result<bool, &'static str> {
+        validate_spans(&spans)?;
         let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(id) {
             panel.spans = spans;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -118,10 +143,13 @@ impl PanelStore {
         z: Option<i32>,
         background: Option<BackgroundStyle>,
         spans: Option<Vec<OverlaySpan>>,
-    ) -> bool {
+    ) -> Result<bool, &'static str> {
+        if let Some(ref spans) = spans {
+            validate_spans(spans)?;
+        }
         let mut inner = self.inner.write();
         if !inner.panels.contains_key(id) {
-            return false;
+            return Ok(false);
         }
         if let Some(z) = z {
             if z >= inner.next_z {
@@ -144,14 +172,15 @@ impl PanelStore {
         if let Some(spans) = spans {
             panel.spans = spans;
         }
-        true
+        Ok(true)
     }
 
     /// Update specific spans by their `id` field.
     ///
     /// For each span in `updates`, find the span with matching `id` in the panel
     /// and replace its text, colors, and attributes. Returns false if panel not found.
-    pub fn update_spans(&self, panel_id: &str, updates: &[OverlaySpan]) -> bool {
+    pub fn update_spans(&self, panel_id: &str, updates: &[OverlaySpan]) -> Result<bool, &'static str> {
+        validate_spans(updates)?;
         let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(panel_id) {
             for update in updates {
@@ -168,22 +197,23 @@ impl PanelStore {
                     }
                 }
             }
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
     /// Replace the stored region writes for a panel.
     ///
     /// Returns false if the panel does not exist.
-    pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> bool {
+    pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> Result<bool, &'static str> {
+        validate_region_writes(&writes)?;
         let mut inner = self.inner.write();
         if let Some(panel) = inner.panels.get_mut(id) {
             panel.region_writes = writes;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -297,7 +327,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(store.update(&id, new_spans));
+        assert!(store.update(&id, new_spans).unwrap());
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.spans[0].text, "updated");
     }
@@ -308,14 +338,14 @@ mod tests {
         let id = store.create(Position::Bottom, 1, Some(0), None, vec![], false, ScreenMode::Normal).unwrap();
 
         // Patch only height
-        assert!(store.patch(&id, None, Some(3), None, None, None));
+        assert!(store.patch(&id, None, Some(3), None, None, None).unwrap());
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.height, 3);
         assert_eq!(panel.position, Position::Bottom);
         assert_eq!(panel.z, 0);
 
         // Patch position and z
-        assert!(store.patch(&id, Some(Position::Top), None, Some(99), None, None));
+        assert!(store.patch(&id, Some(Position::Top), None, Some(99), None, None).unwrap());
         let panel = store.get(&id).unwrap();
         assert_eq!(panel.position, Position::Top);
         assert_eq!(panel.z, 99);
@@ -403,7 +433,7 @@ mod tests {
             italic: false,
             underline: true,
         }];
-        assert!(store.update_spans(&pid, &updates));
+        assert!(store.update_spans(&pid, &updates).unwrap());
 
         let panel = store.get(&pid).unwrap();
         // "label" span should be unchanged
@@ -428,7 +458,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(!store.update_spans("nonexistent", &updates));
+        assert!(!store.update_spans("nonexistent", &updates).unwrap());
     }
 
     #[test]
@@ -455,7 +485,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(store.update_spans(&pid, &updates));
+        assert!(store.update_spans(&pid, &updates).unwrap());
 
         // Original span should be unchanged
         let panel = store.get(&pid).unwrap();
@@ -491,7 +521,7 @@ mod tests {
                 underline: false,
             },
         ];
-        assert!(store.region_write(&pid, writes));
+        assert!(store.region_write(&pid, writes).unwrap());
 
         let panel = store.get(&pid).unwrap();
         assert_eq!(panel.region_writes.len(), 2);
@@ -517,7 +547,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(store.region_write(&pid, writes1));
+        assert!(store.region_write(&pid, writes1).unwrap());
         assert_eq!(store.get(&pid).unwrap().region_writes.len(), 1);
 
         // Replace with new writes
@@ -543,7 +573,7 @@ mod tests {
                 underline: false,
             },
         ];
-        assert!(store.region_write(&pid, writes2));
+        assert!(store.region_write(&pid, writes2).unwrap());
 
         let panel = store.get(&pid).unwrap();
         assert_eq!(panel.region_writes.len(), 2);
@@ -554,7 +584,7 @@ mod tests {
     #[test]
     fn test_region_write_nonexistent_panel() {
         let store = PanelStore::new();
-        assert!(!store.region_write("nonexistent", vec![]));
+        assert!(!store.region_write("nonexistent", vec![]).unwrap());
     }
 
     #[test]

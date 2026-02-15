@@ -4,6 +4,7 @@ mod handlers;
 pub mod ws_methods;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
@@ -134,6 +135,7 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
     let protected = Router::new()
         .merge(session_mgmt_routes)
         .nest("/sessions/:name", session_routes)
+        .nest_service("/mcp", mcp_service)
         .with_state(state);
 
     let protected = match token {
@@ -148,8 +150,8 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         .route("/health", get(health))
         .route("/openapi.yaml", get(openapi_spec))
         .route("/docs", get(docs_index))
-        .nest_service("/mcp", mcp_service)
         .merge(protected)
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB
 }
 
 #[cfg(test)]
@@ -634,9 +636,24 @@ mod tests {
 
         // /sessions/test/screen should require auth
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/sessions/test/screen")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        // /mcp should require auth
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
                     .body(Body::empty())
                     .unwrap(),
             )

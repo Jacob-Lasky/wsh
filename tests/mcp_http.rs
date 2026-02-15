@@ -271,13 +271,24 @@ async fn test_mcp_endpoint_exempt_from_auth() {
     let addr = start_test_server(app).await;
     let client = reqwest::Client::new();
 
-    // MCP endpoint should work without auth token
-    let (json, _session_id) = send_initialize_and_get_session(&client, addr).await;
-    assert_eq!(json["jsonrpc"], "2.0");
-    assert_eq!(json["id"], 1);
-    assert!(json["result"]["serverInfo"]["name"].is_string());
+    // MCP endpoint should require auth when token is set (C4 fix)
+    let resp = client
+        .post(format!("http://{addr}/mcp"))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}"#,
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        401,
+        "MCP endpoint should require auth when token is set"
+    );
 
-    // Meanwhile, REST API should reject without auth
+    // REST API should also reject without auth
     let resp = client
         .get(format!("http://{addr}/sessions"))
         .send()

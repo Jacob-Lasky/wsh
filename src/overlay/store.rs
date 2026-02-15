@@ -7,6 +7,32 @@ use super::types::{BackgroundStyle, Overlay, OverlayId, OverlaySpan, RegionWrite
 
 const MAX_OVERLAYS: usize = 256;
 const MAX_SPANS_PER_OVERLAY: usize = 4096;
+const MAX_REGION_WRITES: usize = 4096;
+const MAX_TEXT_BYTES: usize = 65_536; // 64 KB per span/write
+
+fn validate_spans(spans: &[OverlaySpan]) -> Result<(), &'static str> {
+    if spans.len() > MAX_SPANS_PER_OVERLAY {
+        return Err("too many spans");
+    }
+    for span in spans {
+        if span.text.len() > MAX_TEXT_BYTES {
+            return Err("span text too large");
+        }
+    }
+    Ok(())
+}
+
+fn validate_region_writes(writes: &[RegionWrite]) -> Result<(), &'static str> {
+    if writes.len() > MAX_REGION_WRITES {
+        return Err("too many region writes");
+    }
+    for w in writes {
+        if w.text.len() > MAX_TEXT_BYTES {
+            return Err("region write text too large");
+        }
+    }
+    Ok(())
+}
 
 /// Thread-safe store for overlays
 #[derive(Clone)]
@@ -47,9 +73,7 @@ impl OverlayStore {
         if inner.overlays.len() >= MAX_OVERLAYS {
             return Err("maximum overlay count reached");
         }
-        if spans.len() > MAX_SPANS_PER_OVERLAY {
-            return Err("too many spans");
-        }
+        validate_spans(&spans)?;
         let id = Uuid::new_v4().to_string();
         let z = z.unwrap_or_else(|| {
             let z = inner.next_z;
@@ -92,13 +116,14 @@ impl OverlayStore {
     }
 
     /// Update an overlay's spans (full replacement)
-    pub fn update(&self, id: &str, spans: Vec<OverlaySpan>) -> bool {
+    pub fn update(&self, id: &str, spans: Vec<OverlaySpan>) -> Result<bool, &'static str> {
+        validate_spans(&spans)?;
         let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(id) {
             overlay.spans = spans;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -150,7 +175,8 @@ impl OverlayStore {
     ///
     /// For each span in `updates`, find the span with matching `id` in the overlay
     /// and replace its text, colors, and attributes. Returns false if overlay not found.
-    pub fn update_spans(&self, overlay_id: &str, updates: &[OverlaySpan]) -> bool {
+    pub fn update_spans(&self, overlay_id: &str, updates: &[OverlaySpan]) -> Result<bool, &'static str> {
+        validate_spans(updates)?;
         let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(overlay_id) {
             for update in updates {
@@ -167,22 +193,23 @@ impl OverlayStore {
                     }
                 }
             }
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
     /// Replace the stored region writes for an overlay.
     ///
     /// Returns false if the overlay does not exist.
-    pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> bool {
+    pub fn region_write(&self, id: &str, writes: Vec<RegionWrite>) -> Result<bool, &'static str> {
+        validate_region_writes(&writes)?;
         let mut inner = self.inner.write();
         if let Some(overlay) = inner.overlays.get_mut(id) {
             overlay.region_writes = writes;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -322,7 +349,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(store.update_spans(&oid, &updates));
+        assert!(store.update_spans(&oid, &updates).unwrap());
 
         let overlay = store.get(&oid).unwrap();
         // "label" span should be unchanged
@@ -347,7 +374,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(!store.update_spans("nonexistent", &updates));
+        assert!(!store.update_spans("nonexistent", &updates).unwrap());
     }
 
     #[test]
@@ -374,7 +401,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(store.update_spans(&oid, &updates));
+        assert!(store.update_spans(&oid, &updates).unwrap());
 
         // Original span should be unchanged
         let overlay = store.get(&oid).unwrap();
@@ -408,7 +435,7 @@ mod tests {
                 underline: false,
             },
         ];
-        assert!(store.region_write(&oid, writes));
+        assert!(store.region_write(&oid, writes).unwrap());
 
         let overlay = store.get(&oid).unwrap();
         assert_eq!(overlay.region_writes.len(), 2);
@@ -435,7 +462,7 @@ mod tests {
             italic: false,
             underline: false,
         }];
-        assert!(store.region_write(&oid, writes1));
+        assert!(store.region_write(&oid, writes1).unwrap());
         assert_eq!(store.get(&oid).unwrap().region_writes.len(), 1);
 
         let writes2 = vec![
@@ -460,7 +487,7 @@ mod tests {
                 underline: false,
             },
         ];
-        assert!(store.region_write(&oid, writes2));
+        assert!(store.region_write(&oid, writes2).unwrap());
 
         let overlay = store.get(&oid).unwrap();
         assert_eq!(overlay.region_writes.len(), 2);
@@ -471,7 +498,7 @@ mod tests {
     #[test]
     fn test_region_write_nonexistent_overlay() {
         let store = OverlayStore::new();
-        assert!(!store.region_write("nonexistent", vec![]));
+        assert!(!store.region_write("nonexistent", vec![]).unwrap());
     }
 
     #[test]

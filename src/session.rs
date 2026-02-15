@@ -71,6 +71,12 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// Maximum number of concurrent streaming clients per session.
+///
+/// Prevents resource exhaustion from too many simultaneous WebSocket or
+/// socket connections to a single session.
+const MAX_CLIENTS_PER_SESSION: usize = 64;
+
 /// RAII guard that decrements the session client count on drop.
 pub struct ClientGuard {
     counter: Arc<AtomicUsize>,
@@ -85,11 +91,18 @@ impl Drop for ClientGuard {
 impl Session {
     /// Register a new streaming client, returning an RAII guard that decrements
     /// the count when dropped.
-    pub fn connect(&self) -> ClientGuard {
-        self.client_count.fetch_add(1, Ordering::Relaxed);
-        ClientGuard {
-            counter: Arc::clone(&self.client_count),
+    ///
+    /// Returns `None` if the session already has [`MAX_CLIENTS_PER_SESSION`]
+    /// connected clients. Uses atomic fetch-add with rollback to avoid races.
+    pub fn connect(&self) -> Option<ClientGuard> {
+        let prev = self.client_count.fetch_add(1, Ordering::Relaxed);
+        if prev >= MAX_CLIENTS_PER_SESSION {
+            self.client_count.fetch_sub(1, Ordering::Relaxed);
+            return None;
         }
+        Some(ClientGuard {
+            counter: Arc::clone(&self.client_count),
+        })
     }
 
     /// Return the number of currently connected streaming clients.
@@ -194,6 +207,17 @@ impl Session {
         let pty = Arc::new(parking_lot::Mutex::new(pty));
 
         // Monitor child exit via a oneshot channel.
+        //
+        // NOTE: The JoinHandles from the three spawn_blocking tasks below
+        // (child exit monitor, PTY reader, PTY writer) are intentionally not
+        // stored. Session derives Clone, and JoinHandle is not Clone, so
+        // tracking them would require Arc<Mutex<Option<JoinHandle>>> per task.
+        // This complexity is unnecessary because:
+        //   1. All three tasks self-terminate when the PTY fd closes or the
+        //      child exits (triggered by Session drop / drain's SIGKILL).
+        //   2. The tokio runtime does not abort blocking tasks on shutdown —
+        //      they run to completion on the blocking thread pool.
+        //   3. drain() already ensures children are killed within 3 seconds.
         let (child_exit_tx, child_exit_rx) = tokio::sync::oneshot::channel::<()>();
         if let Some(mut child) = pty_child {
             tokio::task::spawn_blocking(move || {

@@ -390,7 +390,14 @@ async fn run_server(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "ephemeral monitor lagged on session events");
+                    if !config_for_monitor.is_persistent() && sessions_for_monitor.is_empty() {
+                        tracing::info!("last session ended (detected after lag), ephemeral server shutting down");
+                        return true;
+                    }
+                    continue;
+                }
             }
         }
     });
@@ -669,8 +676,14 @@ fn spawn_server_daemon(
         cmd.process_group(0);
     }
 
-    cmd.spawn().map_err(WshError::Io)?;
+    let child = cmd.spawn().map_err(WshError::Io)?;
     tracing::debug!("spawned wsh server daemon");
+
+    // Reap the child in a background thread to prevent zombie accumulation.
+    std::thread::spawn(move || {
+        let _ = child.wait_with_output();
+    });
+
     Ok(())
 }
 

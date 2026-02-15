@@ -482,7 +482,16 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     session: &Session,
 ) -> io::Result<()> {
-    let _client_guard = session.connect();
+    let _client_guard = match session.connect() {
+        Some(guard) => guard,
+        None => {
+            tracing::warn!(session = %session.name, "connection limit reached, rejecting socket client");
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "too many clients connected to session",
+            ));
+        }
+    };
     let (reader, mut writer) = tokio::io::split(stream);
     // BufReader preserves partially-read bytes across select! cancellation,
     // making Frame::read_from cancellation-safe.
@@ -552,8 +561,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "socket client lagged on visual updates, disconnecting");
-                        break;
+                        tracing::warn!(skipped = n, "socket client lagged on visual updates, skipping missed frames");
                     }
                 }
             }
@@ -569,8 +577,7 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "socket client lagged on output, disconnecting");
-                        break;
+                        tracing::warn!(skipped = n, "socket client lagged on output, skipping missed frames");
                     }
                 }
             }

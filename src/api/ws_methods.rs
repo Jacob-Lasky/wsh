@@ -461,11 +461,13 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if session.overlays.update(&params.id, params.spans) {
-                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
-                WsResponse::success(id, method, serde_json::json!({}))
-            } else {
-                WsResponse::error(
+            match session.overlays.update(&params.id, params.spans) {
+                Err(e) => WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(true) => {
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+                Ok(false) => WsResponse::error(
                     id,
                     method,
                     "overlay_not_found",
@@ -537,7 +539,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 .query(Query::Scrollback {
                     format: params.format,
                     offset: params.offset,
-                    limit: params.limit,
+                    limit: params.limit.min(10_000),
                 })
                 .await
             {
@@ -664,7 +666,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     );
                 }
             };
-            if !session.panels.patch(
+            match session.panels.patch(
                 &params.id,
                 Some(params.position.clone()),
                 Some(params.height),
@@ -672,12 +674,16 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 None,
                 Some(params.spans),
             ) {
-                return WsResponse::error(
-                    id,
-                    method,
-                    "panel_not_found",
-                    &format!("No panel exists with id '{}'.", params.id),
-                );
+                Err(e) => return WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(false) => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "panel_not_found",
+                        &format!("No panel exists with id '{}'.", params.id),
+                    );
+                }
+                Ok(true) => {}
             }
             let needs_reconfigure = old.position != params.position
                 || old.height != params.height
@@ -716,7 +722,7 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     );
                 }
             };
-            if !session.panels.patch(
+            match session.panels.patch(
                 &params.id,
                 params.position.clone(),
                 params.height,
@@ -724,12 +730,16 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 params.background,
                 params.spans.clone(),
             ) {
-                return WsResponse::error(
-                    id,
-                    method,
-                    "panel_not_found",
-                    &format!("No panel exists with id '{}'.", params.id),
-                );
+                Err(e) => return WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(false) => {
+                    return WsResponse::error(
+                        id,
+                        method,
+                        "panel_not_found",
+                        &format!("No panel exists with id '{}'.", params.id),
+                    );
+                }
+                Ok(true) => {}
             }
             let needs_reconfigure = params.position.as_ref().is_some_and(|p| *p != old.position)
                 || params.height.is_some_and(|h| h != old.height)
@@ -781,11 +791,13 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if session.overlays.update_spans(&params.id, &params.spans) {
-                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
-                WsResponse::success(id, method, serde_json::json!({}))
-            } else {
-                WsResponse::error(
+            match session.overlays.update_spans(&params.id, &params.spans) {
+                Err(e) => WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(true) => {
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+                Ok(false) => WsResponse::error(
                     id,
                     method,
                     "overlay_not_found",
@@ -798,11 +810,13 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if session.overlays.region_write(&params.id, params.writes) {
-                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
-                WsResponse::success(id, method, serde_json::json!({}))
-            } else {
-                WsResponse::error(
+            match session.overlays.region_write(&params.id, params.writes) {
+                Err(e) => WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(true) => {
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+                Ok(false) => WsResponse::error(
                     id,
                     method,
                     "overlay_not_found",
@@ -815,16 +829,18 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if session.panels.update_spans(&params.id, &params.spans) {
-                crate::panel::flush_panel_content(
-                    &session.panels,
-                    &params.id,
-                    &session.terminal_size,
-                );
-                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
-                WsResponse::success(id, method, serde_json::json!({}))
-            } else {
-                WsResponse::error(
+            match session.panels.update_spans(&params.id, &params.spans) {
+                Err(e) => WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(true) => {
+                    crate::panel::flush_panel_content(
+                        &session.panels,
+                        &params.id,
+                        &session.terminal_size,
+                    );
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+                Ok(false) => WsResponse::error(
                     id,
                     method,
                     "panel_not_found",
@@ -837,16 +853,18 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if session.panels.region_write(&params.id, params.writes) {
-                crate::panel::flush_panel_content(
-                    &session.panels,
-                    &params.id,
-                    &session.terminal_size,
-                );
-                let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
-                WsResponse::success(id, method, serde_json::json!({}))
-            } else {
-                WsResponse::error(
+            match session.panels.region_write(&params.id, params.writes) {
+                Err(e) => WsResponse::error(id, method, "invalid_overlay", e),
+                Ok(true) => {
+                    crate::panel::flush_panel_content(
+                        &session.panels,
+                        &params.id,
+                        &session.terminal_size,
+                    );
+                    let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
+                    WsResponse::success(id, method, serde_json::json!({}))
+                }
+                Ok(false) => WsResponse::error(
                     id,
                     method,
                     "panel_not_found",
@@ -870,23 +888,17 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                         );
                     }
                     if let Some(spans) = &params.spans {
-                        if !session.overlays.update_spans(&params.id, spans) {
-                            return WsResponse::error(
-                                id,
-                                method,
-                                "overlay_not_found",
-                                &format!("No overlay exists with id '{}'.", params.id),
-                            );
+                        match session.overlays.update_spans(&params.id, spans) {
+                            Err(e) => return WsResponse::error(id, method, "invalid_overlay", e),
+                            Ok(false) => return WsResponse::error(id, method, "overlay_not_found", &format!("No overlay exists with id '{}'.", params.id)),
+                            Ok(true) => {}
                         }
                     }
                     if let Some(writes) = params.writes {
-                        if !session.overlays.region_write(&params.id, writes) {
-                            return WsResponse::error(
-                                id,
-                                method,
-                                "overlay_not_found",
-                                &format!("No overlay exists with id '{}'.", params.id),
-                            );
+                        match session.overlays.region_write(&params.id, writes) {
+                            Err(e) => return WsResponse::error(id, method, "invalid_overlay", e),
+                            Ok(false) => return WsResponse::error(id, method, "overlay_not_found", &format!("No overlay exists with id '{}'.", params.id)),
+                            Ok(true) => {}
                         }
                     }
                     let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
@@ -902,23 +914,17 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                         );
                     }
                     if let Some(spans) = &params.spans {
-                        if !session.panels.update_spans(&params.id, spans) {
-                            return WsResponse::error(
-                                id,
-                                method,
-                                "panel_not_found",
-                                &format!("No panel exists with id '{}'.", params.id),
-                            );
+                        match session.panels.update_spans(&params.id, spans) {
+                            Err(e) => return WsResponse::error(id, method, "invalid_overlay", e),
+                            Ok(false) => return WsResponse::error(id, method, "panel_not_found", &format!("No panel exists with id '{}'.", params.id)),
+                            Ok(true) => {}
                         }
                     }
                     if let Some(writes) = params.writes {
-                        if !session.panels.region_write(&params.id, writes) {
-                            return WsResponse::error(
-                                id,
-                                method,
-                                "panel_not_found",
-                                &format!("No panel exists with id '{}'.", params.id),
-                            );
+                        match session.panels.region_write(&params.id, writes) {
+                            Err(e) => return WsResponse::error(id, method, "invalid_overlay", e),
+                            Ok(false) => return WsResponse::error(id, method, "panel_not_found", &format!("No panel exists with id '{}'.", params.id)),
+                            Ok(true) => {}
                         }
                     }
                     crate::panel::flush_panel_content(

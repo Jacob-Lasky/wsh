@@ -357,6 +357,21 @@ curl 'http://host:8080/sessions/default/screen?token=my-secret'
 
 See [docs/api/authentication.md](docs/api/authentication.md) for details.
 
+### MCP Authentication
+
+The `/mcp` endpoint is subject to the same bearer token requirement as the
+rest of the API. When a `--token` is configured, MCP clients must attach the
+token as an `Authorization: Bearer <token>` header on every HTTP request.
+How to supply a bearer token varies by MCP client — consult your client's
+documentation. (The MCP specification defines an OAuth 2.1-based
+authorization flow, but `wsh` does not currently implement it; a static
+bearer token is used instead.)
+
+If your MCP client does not support bearer tokens, bind the server to
+localhost (the default) so that no token is required. A future release may
+add the option to restrict `/mcp` to localhost connections regardless of the
+server's bind address.
+
 ## Architecture
 
 ```

@@ -618,12 +618,10 @@ impl WshMcpServer {
 
                 // Replace spans if provided
                 if let Some(spans) = spans {
-                    let found = session.overlays.update(&id, spans);
-                    if !found {
-                        return Err(ErrorData::invalid_params(
-                            format!("overlay not found: {id}"),
-                            None,
-                        ));
+                    match session.overlays.update(&id, spans) {
+                        Err(e) => return Err(ErrorData::invalid_params(e.to_string(), None)),
+                        Ok(false) => return Err(ErrorData::invalid_params(format!("overlay not found: {id}"), None)),
+                        Ok(true) => {}
                     }
                 }
 
@@ -797,19 +795,17 @@ impl WshMcpServer {
         match params.id {
             // UPDATE existing panel
             Some(id) => {
-                let found = session.panels.patch(
+                match session.panels.patch(
                     &id,
                     position,
                     params.height,
                     params.z,
                     background,
                     spans,
-                );
-                if !found {
-                    return Err(ErrorData::invalid_params(
-                        format!("panel not found: {id}"),
-                        None,
-                    ));
+                ) {
+                    Err(e) => return Err(ErrorData::invalid_params(e.to_string(), None)),
+                    Ok(false) => return Err(ErrorData::invalid_params(format!("panel not found: {id}"), None)),
+                    Ok(true) => {}
                 }
 
                 crate::panel::reconfigure_layout(

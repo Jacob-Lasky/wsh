@@ -75,17 +75,20 @@ pub(super) async fn ws_raw(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    Ok(ws.on_upgrade(|socket| handle_ws_raw(socket, session, state.shutdown)))
+    let client_guard = session.connect().ok_or_else(|| {
+        ApiError::ResourceLimitReached("too many clients connected to session".into())
+    })?;
+    Ok(ws.on_upgrade(|socket| handle_ws_raw(socket, session, state.shutdown, client_guard)))
 }
 
 async fn handle_ws_raw(
     socket: WebSocket,
     session: Session,
     shutdown: crate::shutdown::ShutdownCoordinator,
+    _client_guard: crate::session::ClientGuard,
 ) {
     // Register this connection for graceful shutdown tracking
     let (_guard, mut shutdown_rx) = shutdown.register();
-    let _client_guard = session.connect();
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
@@ -134,13 +137,29 @@ async fn handle_ws_raw(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
-                        if input_tx.send(Bytes::from(data)).await.is_err() {
-                            break;
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            input_tx.send(Bytes::from(data)),
+                        ).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                tracing::warn!("ws_raw input send timed out, closing");
+                                break;
+                            }
                         }
                     }
                     Some(Ok(Message::Text(text))) => {
-                        if input_tx.send(Bytes::from(text)).await.is_err() {
-                            break;
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            input_tx.send(Bytes::from(text)),
+                        ).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                tracing::warn!("ws_raw input send timed out, closing");
+                                break;
+                            }
                         }
                     }
                     Some(Ok(Message::Pong(_))) => {
@@ -200,16 +219,19 @@ pub(super) async fn ws_json(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    Ok(ws.on_upgrade(|socket| handle_ws_json(socket, session, state.shutdown)))
+    let client_guard = session.connect().ok_or_else(|| {
+        ApiError::ResourceLimitReached("too many clients connected to session".into())
+    })?;
+    Ok(ws.on_upgrade(|socket| handle_ws_json(socket, session, state.shutdown, client_guard)))
 }
 
 async fn handle_ws_json(
     socket: WebSocket,
     session: Session,
     shutdown: crate::shutdown::ShutdownCoordinator,
+    _client_guard: crate::session::ClientGuard,
 ) {
     let (_guard, mut shutdown_rx) = shutdown.register();
-    let _client_guard = session.connect();
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Send connected message
@@ -1320,7 +1342,7 @@ async fn handle_server_ws_request(
                     SubHandle {
                         subscribed_types: subscribed_types.clone(),
                         task,
-                        _client_guard: Some(session.connect()),
+                        _client_guard: session.connect(),
                     },
                 );
 
@@ -1662,7 +1684,7 @@ pub(super) async fn overlay_update(
     Json(req): Json<UpdateOverlayRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    if session.overlays.update(&id, req.spans) {
+    if session.overlays.update(&id, req.spans).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -1715,7 +1737,7 @@ pub(super) async fn overlay_update_spans(
     Json(req): Json<UpdateSpansRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    if session.overlays.update_spans(&id, &req.spans) {
+    if session.overlays.update_spans(&id, &req.spans).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -1729,7 +1751,7 @@ pub(super) async fn overlay_region_write(
     Json(req): Json<RegionWriteRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    if session.overlays.region_write(&id, req.writes) {
+    if session.overlays.region_write(&id, req.writes).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::OverlaysChanged);
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -1830,6 +1852,7 @@ pub(super) async fn panel_update(
     if !session
         .panels
         .patch(&id, Some(req.position.clone()), Some(req.height), Some(req.z), None, Some(req.spans))
+        .map_err(|e| ApiError::InvalidOverlay(e.into()))?
     {
         return Err(ApiError::PanelNotFound(id));
     }
@@ -1863,6 +1886,7 @@ pub(super) async fn panel_patch(
     if !session
         .panels
         .patch(&id, req.position.clone(), req.height, req.z, req.background, req.spans.clone())
+        .map_err(|e| ApiError::InvalidOverlay(e.into()))?
     {
         return Err(ApiError::PanelNotFound(id));
     }
@@ -1917,7 +1941,7 @@ pub(super) async fn panel_update_spans(
     Json(req): Json<UpdateSpansRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    if session.panels.update_spans(&id, &req.spans) {
+    if session.panels.update_spans(&id, &req.spans).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
         let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
         Ok(StatusCode::NO_CONTENT)
@@ -1932,7 +1956,7 @@ pub(super) async fn panel_region_write(
     Json(req): Json<RegionWriteRequest>,
 ) -> Result<StatusCode, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    if session.panels.region_write(&id, req.writes) {
+    if session.panels.region_write(&id, req.writes).map_err(|e| ApiError::InvalidOverlay(e.into()))? {
         panel::flush_panel_content(&session.panels, &id, &session.terminal_size);
         let _ = session.visual_update_tx.send(crate::protocol::VisualUpdate::PanelsChanged);
         Ok(StatusCode::NO_CONTENT)
