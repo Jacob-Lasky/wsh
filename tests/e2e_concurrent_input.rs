@@ -95,6 +95,7 @@ async fn test_concurrent_input_from_multiple_sources() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -258,6 +259,7 @@ async fn test_rapid_http_requests() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

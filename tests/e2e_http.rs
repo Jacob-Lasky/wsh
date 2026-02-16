@@ -103,6 +103,7 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;
@@ -260,6 +261,7 @@ async fn test_scrollback_endpoint_with_real_pty() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

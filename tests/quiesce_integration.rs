@@ -60,6 +60,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     (state, input_rx, activity, parser_tx)
 }
@@ -737,6 +738,7 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     (state, activity_a, activity_b, parser_tx_a, parser_tx_b)
 }
@@ -885,6 +887,7 @@ async fn test_http_quiesce_any_no_sessions_returns_404() {
         sessions: SessionRegistry::new(),
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = api::router(state, None);
     let addr = start_server(app).await;

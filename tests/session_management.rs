@@ -24,6 +24,7 @@ fn create_empty_test_app() -> axum::Router {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     router(state, None)
 }

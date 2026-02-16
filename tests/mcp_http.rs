@@ -21,6 +21,7 @@ fn create_test_app() -> axum::Router {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     router(state, None)
 }
@@ -265,6 +266,7 @@ async fn test_mcp_endpoint_exempt_from_auth() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     // Create router WITH auth token
     let app = router(state, Some("secret-token".to_string()));
@@ -1523,6 +1525,7 @@ async fn test_http_and_mcp_coexist() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = router(state, None);
     let addr = start_test_server(app).await;

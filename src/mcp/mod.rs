@@ -134,6 +134,7 @@ impl WshMcpServer {
         &self,
         Parameters(params): Parameters<CreateSessionParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        let param_name = params.name;
         let command = match params.command {
             Some(cmd) => SpawnCommand::Command {
                 command: cmd,
@@ -148,7 +149,7 @@ impl WshMcpServer {
         let rows = params.rows.unwrap_or(24).max(1);
         let cols = params.cols.unwrap_or(80).max(1);
 
-        self.state.sessions.name_available(&params.name).map_err(|e| match e {
+        self.state.sessions.name_available(&param_name).map_err(|e| match e {
             RegistryError::NameExists(n) => ErrorData::invalid_params(
                 format!("session name already exists: {n}"),
                 None,
@@ -163,17 +164,24 @@ impl WshMcpServer {
             ),
         })?;
 
+        // spawn_with_options calls fork()/exec() — run on blocking pool.
+        let cwd = params.cwd;
+        let env = params.env;
         let (session, child_exit_rx) =
-            Session::spawn_with_options("".to_string(), command, rows, cols, params.cwd, params.env)
-                .map_err(|e| {
-                    ErrorData::internal_error(
-                        format!("failed to spawn session: {e}"),
-                        None,
-                    )
-                })?;
+            tokio::task::spawn_blocking(move || {
+                Session::spawn_with_options("".to_string(), command, rows, cols, cwd, env)
+            })
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("spawn task failed: {e}"), None))?
+            .map_err(|e| {
+                ErrorData::internal_error(
+                    format!("failed to spawn session: {e}"),
+                    None,
+                )
+            })?;
 
         let (assigned_name, session) =
-            match self.state.sessions.insert_and_get(params.name, session.clone()) {
+            match self.state.sessions.insert_and_get(param_name, session.clone()) {
                 Ok(result) => result,
                 Err(e) => {
                     session.shutdown();

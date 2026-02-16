@@ -1,4 +1,4 @@
-use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use thiserror::Error;
 
@@ -42,7 +42,11 @@ impl Default for SpawnCommand {
 }
 
 pub struct Pty {
-    pair: PtyPair,
+    // Only the master side is retained. The slave side is dropped after
+    // spawn (see `spawn_with_cmd`) so that the kernel PTY master read
+    // returns EOF promptly when the child exits, instead of remaining
+    // open as long as any Pty clone is alive.
+    master: Box<dyn portable_pty::MasterPty + Send>,
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
 }
 
@@ -58,6 +62,13 @@ impl Pty {
     ///
     /// Use this when you need to customize the command (e.g. set cwd or env)
     /// before spawning.
+    ///
+    /// The slave side of the PTY pair is dropped after spawning the child.
+    /// This is critical: if the parent retains the slave fd, the master
+    /// read never returns EOF when the child exits, causing PTY reader
+    /// threads to block indefinitely until all `Arc<Mutex<Pty>>` clones
+    /// are dropped. Dropping the slave here ensures the reader thread
+    /// exits promptly when the child dies.
     pub fn spawn_with_cmd(rows: u16, cols: u16, cmd: CommandBuilder) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
@@ -72,7 +83,10 @@ impl Pty {
 
         let child = pair.slave.spawn_command(cmd).map_err(PtyError::SpawnCommand)?;
 
-        Ok(Self { pair, child: Some(child) })
+        // Drop slave — only the child process should hold it open.
+        drop(pair.slave);
+
+        Ok(Self { master: pair.master, child: Some(child) })
     }
 
     /// Build a CommandBuilder from the spawn configuration.
@@ -108,15 +122,15 @@ impl Pty {
     }
 
     pub fn take_reader(&self) -> Result<Box<dyn Read + Send>, PtyError> {
-        self.pair.master.try_clone_reader().map_err(PtyError::CloneReader)
+        self.master.try_clone_reader().map_err(PtyError::CloneReader)
     }
 
     pub fn take_writer(&self) -> Result<Box<dyn Write + Send>, PtyError> {
-        self.pair.master.take_writer().map_err(PtyError::TakeWriter)
+        self.master.take_writer().map_err(PtyError::TakeWriter)
     }
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), PtyError> {
-        self.pair.master.resize(PtySize {
+        self.master.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,

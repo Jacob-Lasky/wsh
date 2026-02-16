@@ -530,9 +530,17 @@ impl Default for SessionRegistry {
 }
 
 impl SessionRegistry {
+    /// Default maximum number of sessions when no explicit limit is set.
+    ///
+    /// Each session costs ~2 fds (PTY pair) + 3 blocking threads + memory
+    /// for parser state and scrollback. 256 provides ample headroom for
+    /// typical use while preventing a runaway agent from exhausting the
+    /// blocking thread pool (default 512 = ~170 sessions at 3 threads each).
+    const DEFAULT_MAX_SESSIONS: usize = 256;
+
     /// Create an empty registry with a broadcast channel for lifecycle events.
     pub fn new() -> Self {
-        Self::with_max_sessions(None)
+        Self::with_max_sessions(Some(Self::DEFAULT_MAX_SESSIONS))
     }
 
     /// Create an empty registry with an optional maximum session count.
@@ -815,39 +823,57 @@ impl SessionRegistry {
         let registry = self.clone();
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
-            // Look up the session's current name by stable identity.
-            // The identity Arc is shared across all clones of the same
-            // Session, so Arc::ptr_eq identifies the session regardless
-            // of renames. The original name is only used as a fallback
-            // for logging if the session was already removed (e.g. by
-            // drain or kill) before the child exited.
-            let current_name = registry.find_name_by_identity(&identity)
-                .unwrap_or_else(|| name.clone());
-            tracing::info!(session = %current_name, "session child process exited");
-            // Signal all attached streaming clients to detach before removing
-            // the session. Without this, socket streaming loops would block
-            // forever on output_rx.recv() because the Session holds a
-            // broadcast::Sender clone that keeps the channel open.
-            if let Some(session) = registry.get(&current_name) {
-                session.detach();
-            }
-            registry.remove(&current_name);
+            // ── Design decision: atomic detach + remove ──────────────
+            //
+            // The identity lookup, detach, and remove MUST happen under
+            // a single write lock to prevent races with concurrent
+            // rename() calls. Without atomicity, a rename between
+            // find_name_by_identity() and remove() would orphan the
+            // session in the registry (the old name is gone, the new
+            // name is never removed). This was a latent bug in the
+            // three-separate-lock approach.
+            //
+            // See also: the v1→v2→v3 evolution notes above for the
+            // identity parameter rationale.
+            // ─────────────────────────────────────────────────────────
+            registry.detach_and_remove_by_identity(&identity, &name);
         });
     }
 
-    /// Find a session's current name by identity (Arc pointer equality).
+    /// Atomically find, detach, and remove a session by identity.
     ///
-    /// Used by `monitor_child_exit` to locate a session that may have been
-    /// renamed since the monitor was started. The `client_count` Arc is shared
-    /// across all clones of the same Session, making it a stable identity marker.
-    fn find_name_by_identity(&self, identity: &Arc<AtomicUsize>) -> Option<String> {
-        let inner = self.inner.read();
-        for (name, session) in &inner.sessions {
-            if Arc::ptr_eq(identity, &session.client_count) {
-                return Some(name.clone());
+    /// Performs identity lookup (Arc::ptr_eq), detach, and remove under a
+    /// single write lock to prevent races with concurrent rename() calls.
+    /// The `fallback_name` is used only for logging if the session was
+    /// already removed (e.g. by drain or kill) before the child exited.
+    fn detach_and_remove_by_identity(
+        &self,
+        identity: &Arc<AtomicUsize>,
+        fallback_name: &str,
+    ) {
+        let mut inner = self.inner.write();
+
+        // Find the session's current name by stable identity.
+        let current_name = inner
+            .sessions
+            .iter()
+            .find(|(_, s)| Arc::ptr_eq(identity, &s.client_count))
+            .map(|(n, _)| n.clone());
+
+        match current_name {
+            Some(name) => {
+                tracing::info!(session = %name, "session child process exited");
+                if let Some(session) = inner.sessions.remove(&name) {
+                    session.cancelled.cancel();
+                    session.detach();
+                    let _ = self.events_tx.send(SessionEvent::Destroyed { name });
+                }
+            }
+            None => {
+                // Session was already removed (e.g. by drain or kill).
+                tracing::info!(session = %fallback_name, "session child process exited (already removed)");
             }
         }
-        None
     }
 }
 

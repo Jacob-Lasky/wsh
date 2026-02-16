@@ -114,6 +114,7 @@ async fn test_max_sessions_http_503() {
         sessions: registry,
         shutdown: ShutdownCoordinator::new(),
         server_config: Arc::new(ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = router(state, None);
 

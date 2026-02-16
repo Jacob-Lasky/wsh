@@ -2,6 +2,36 @@
 //!
 //! Provides thread-safe state for controlling whether keyboard input
 //! goes to the PTY (passthrough mode) or only to API subscribers (capture mode).
+//!
+//! # Design decision: no auto-cleanup on client disconnect
+//!
+//! Input capture mode is intentionally NOT tied to any specific client
+//! connection. Capture/release are plain idempotent operations with no
+//! owner tracking. This is a deliberate design choice after evaluating
+//! and reverting an owner-based approach (see git history: d0bf7dc added
+//! auto-release on WS disconnect, 0990160 reverted it).
+//!
+//! **Why no auto-cleanup:**
+//!
+//! - **Multi-agent scenarios**: Multiple agents may share a session. If
+//!   agent A captures input and agent B disconnects, auto-cleanup would
+//!   release A's capture — cascading state loss.
+//! - **Idempotency**: Owner tracking requires identity state, breaking
+//!   the simple capture/release model. Clients would need to track and
+//!   pass ownership tokens.
+//! - **Protocol independence**: Capture mode works across HTTP, WS, MCP,
+//!   and socket transports. Tying it to WS connection lifecycle would
+//!   make it transport-dependent.
+//!
+//! **Recovery mechanisms:**
+//!
+//! - Ctrl+\ toggles capture mode from the local terminal (see
+//!   `server.rs` StdinInput handler).
+//! - Any client can call `release_input` at any time.
+//! - The API `GET /sessions/:name/input/mode` lets agents check state.
+//!
+//! **Do not re-add auto-cleanup.** This has been evaluated and reverted.
+//! If you believe the tradeoffs have changed, discuss before implementing.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

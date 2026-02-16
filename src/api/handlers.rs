@@ -96,8 +96,15 @@ async fn handle_ws_raw(
     shutdown: crate::shutdown::ShutdownCoordinator,
     _client_guard: crate::session::ClientGuard,
 ) {
-    // Register this connection for graceful shutdown tracking
+    // Register this connection for graceful shutdown tracking.
+    // Check borrow immediately after register to handle the case where
+    // this connection was upgraded after shutdown was already signaled
+    // (the watch::changed() future only fires on *changes*, so a handler
+    // that starts after the signal would never see the change).
     let (_guard, mut shutdown_rx) = shutdown.register();
+    if *shutdown_rx.borrow_and_update() {
+        return;
+    }
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
@@ -241,6 +248,9 @@ async fn handle_ws_json(
     _client_guard: crate::session::ClientGuard,
 ) {
     let (_guard, mut shutdown_rx) = shutdown.register();
+    if *shutdown_rx.borrow_and_update() {
+        return;
+    }
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Send connected message
@@ -671,8 +681,20 @@ async fn handle_ws_json(
 pub(super) async fn ws_json_server(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_ws_json_server(socket, state))
+) -> Result<impl IntoResponse, ApiError> {
+    // Enforce server-level WS connection limit.
+    let prev = state.server_ws_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if prev >= super::MAX_SERVER_WS_CONNECTIONS {
+        state.server_ws_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        return Err(ApiError::ResourceLimitReached(
+            "too many server-level WebSocket connections".into(),
+        ));
+    }
+    let ws_count = state.server_ws_count.clone();
+    Ok(ws.on_upgrade(|socket| async move {
+        handle_ws_json_server(socket, state).await;
+        ws_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }))
 }
 
 /// A tagged session event forwarded through the internal mpsc channel.
@@ -747,6 +769,9 @@ fn should_forward_session_event(
 
 async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
     let (_guard, mut shutdown_rx) = state.shutdown.register();
+    if *shutdown_rx.borrow_and_update() {
+        return;
+    }
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Send connected message
@@ -1044,20 +1069,33 @@ async fn handle_server_ws_request(
                 });
             }
 
-            let (session, child_exit_rx) =
-                match Session::spawn_with_options("".to_string(), command, rows, cols, params.cwd, params.env) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        return Some(super::ws_methods::WsResponse::error(
-                            id,
-                            method,
-                            "session_create_failed",
-                            &format!("Failed to create session: {}.", e),
-                        ));
-                    }
-                };
+            let param_name = params.name;
+            let cwd = params.cwd;
+            let env = params.env;
+            let spawn_result = tokio::task::spawn_blocking(move || {
+                Session::spawn_with_options("".to_string(), command, rows, cols, cwd, env)
+            }).await;
+            let (session, child_exit_rx) = match spawn_result {
+                Ok(Ok(result)) => result,
+                Ok(Err(e)) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_create_failed",
+                        &format!("Failed to create session: {}.", e),
+                    ));
+                }
+                Err(e) => {
+                    return Some(super::ws_methods::WsResponse::error(
+                        id,
+                        method,
+                        "session_create_failed",
+                        &format!("Spawn task failed: {}.", e),
+                    ));
+                }
+            };
 
-            match state.sessions.insert_and_get(params.name, session.clone()) {
+            match state.sessions.insert_and_get(param_name, session.clone()) {
                 Ok((assigned_name, _session)) => {
                     // Monitor child exit so the session is auto-removed.
                     state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), child_exit_rx);
@@ -2177,6 +2215,7 @@ pub(super) async fn session_create(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<SessionInfo>), ApiError> {
+    let req_name = req.name;
     let command = match req.command {
         Some(cmd) => SpawnCommand::Command {
             command: cmd,
@@ -2195,18 +2234,28 @@ pub(super) async fn session_create(
     // immediately discarded on name conflict. This is a TOCTOU hint (the
     // name could be taken between the check and the insert), but insert()
     // will catch that and we only waste a PTY in the rare race case.
-    state.sessions.name_available(&req.name).map_err(|e| match e {
+    state.sessions.name_available(&req_name).map_err(|e| match e {
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
     })?;
 
     // Use a placeholder name for spawn; registry.insert will assign the real name.
-    let (session, child_exit_rx) =
-        Session::spawn_with_options("".to_string(), command, rows, cols, req.cwd, req.env)
-            .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
+    //
+    // spawn_with_options calls fork()/exec() which is a blocking syscall.
+    // Under load, fork() on a large-RSS process can take hundreds of ms,
+    // so we run it on the blocking thread pool to avoid stalling the
+    // async executor.
+    let cwd = req.cwd;
+    let env = req.env;
+    let (session, child_exit_rx) = tokio::task::spawn_blocking(move || {
+        Session::spawn_with_options("".to_string(), command, rows, cols, cwd, env)
+    })
+    .await
+    .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?
+    .map_err(|e| ApiError::SessionCreateFailed(e.to_string()))?;
 
-    let (assigned_name, session) = match state.sessions.insert_and_get(req.name, session.clone()) {
+    let (assigned_name, session) = match state.sessions.insert_and_get(req_name, session.clone()) {
         Ok(result) => result,
         Err(e) => {
             session.shutdown();

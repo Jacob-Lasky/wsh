@@ -16,6 +16,7 @@ fn create_empty_state() -> api::AppState {
         sessions: SessionRegistry::new(),
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
+            server_ws_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     }
 }
 

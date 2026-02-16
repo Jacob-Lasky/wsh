@@ -42,11 +42,21 @@ impl ServerConfig {
     }
 }
 
+/// Maximum concurrent server-level WebSocket connections.
+///
+/// Per-session WS endpoints already have a limit (MAX_CLIENTS_PER_SESSION = 64),
+/// but the server-level `/ws/json` endpoint was previously unbounded. This cap
+/// prevents resource exhaustion from a buggy or malicious client opening
+/// thousands of connections.
+const MAX_SERVER_WS_CONNECTIONS: usize = 256;
+
 #[derive(Clone)]
 pub struct AppState {
     pub sessions: SessionRegistry,
     pub shutdown: ShutdownCoordinator,
     pub server_config: Arc<ServerConfig>,
+    /// Counter for server-level WebSocket connections.
+    pub server_ws_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub(crate) fn get_session(
@@ -208,6 +218,7 @@ mod tests {
             sessions: registry,
             shutdown: ShutdownCoordinator::new(),
             server_config: Arc::new(ServerConfig::new(false)),
+            server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         (state, input_rx, "test".to_string())
     }
@@ -671,6 +682,7 @@ mod tests {
             sessions: crate::session::SessionRegistry::new(),
             shutdown: ShutdownCoordinator::new(),
             server_config: Arc::new(ServerConfig::new(false)),
+            server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -1168,6 +1180,7 @@ mod tests {
                 sessions: registry.clone(),
                 shutdown: ShutdownCoordinator::new(),
                 server_config: config.clone(),
+                server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
             None,
         );
@@ -1224,6 +1237,7 @@ mod tests {
                 sessions: registry.clone(),
                 shutdown: ShutdownCoordinator::new(),
                 server_config: config.clone(),
+                server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
             None,
         );
@@ -1277,6 +1291,7 @@ mod tests {
                 sessions: registry.clone(),
                 shutdown: ShutdownCoordinator::new(),
                 server_config: config.clone(),
+                server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
             None,
         );

@@ -193,14 +193,14 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     let rows = msg.rows.max(1);
     let cols = msg.cols.max(1);
 
-    let (session, child_exit_rx) = Session::spawn_with_options(
-        msg.name.clone().unwrap_or_default(),
-        command,
-        rows,
-        cols,
-        msg.cwd,
-        msg.env,
-    )
+    let name_for_spawn = msg.name.clone().unwrap_or_default();
+    let cwd = msg.cwd;
+    let env = msg.env;
+    let (session, child_exit_rx) = tokio::task::spawn_blocking(move || {
+        Session::spawn_with_options(name_for_spawn, command, rows, cols, cwd, env)
+    })
+    .await
+    .map_err(io::Error::other)?
     .map_err(io::Error::other)?;
 
     let name = match sessions.insert(msg.name, session.clone()) {

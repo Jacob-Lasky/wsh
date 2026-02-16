@@ -15,6 +15,7 @@
 use clap::{Parser as ClapParser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use thiserror::Error;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use wsh::{
@@ -290,16 +291,22 @@ async fn run_server(
     }
 
     let persistent = !ephemeral;
-    let sessions = SessionRegistry::with_max_sessions(max_sessions);
-    if let Some(max) = max_sessions {
-        tracing::info!(max_sessions = max, "session limit configured");
-    }
+    // When --max-sessions is explicitly provided, use that value.
+    // Otherwise, the registry uses its built-in default (256).
+    let sessions = match max_sessions {
+        Some(max) => {
+            tracing::info!(max_sessions = max, "session limit configured");
+            SessionRegistry::with_max_sessions(Some(max))
+        }
+        None => SessionRegistry::new(),
+    };
     let shutdown = ShutdownCoordinator::new();
     let server_config = std::sync::Arc::new(api::ServerConfig::new(persistent));
     let state = api::AppState {
         sessions: sessions.clone(),
         shutdown: shutdown.clone(),
         server_config: server_config.clone(),
+        server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
     let app = api::router(state, token);
@@ -393,8 +400,20 @@ async fn run_server(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(skipped = n, "ephemeral monitor lagged on session events");
                     if !config_for_monitor.is_persistent() && sessions_for_monitor.is_empty() {
-                        tracing::info!("last session ended (detected after lag), ephemeral server shutting down");
-                        return true;
+                        // ── Grace period after lag ────────────────────────
+                        //
+                        // During rapid session churn (e.g., AI orchestration
+                        // creating/destroying many sessions), the registry
+                        // may appear empty in the gap between a destroy and
+                        // the next create. Wait briefly before committing to
+                        // shutdown so a racing create has time to land.
+                        // ─────────────────────────────────────────────────
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        if sessions_for_monitor.is_empty() {
+                            tracing::info!("last session ended (detected after lag), ephemeral server shutting down");
+                            return true;
+                        }
+                        tracing::debug!("new session appeared during lag grace period, continuing");
                     }
                     continue;
                 }
@@ -485,7 +504,10 @@ async fn run_mcp(
         }
         Err(_) => {
             let lock_path = socket_path.with_extension("lock");
-            let _lock = acquire_spawn_lock(&lock_path)?;
+            let lp = lock_path.clone();
+            let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
+                .await
+                .map_err(WshError::TaskJoin)??;
             // Re-check after lock
             match client::Client::connect(&socket_path).await {
                 Ok(_) => {
@@ -501,16 +523,28 @@ async fn run_mcp(
     }
 
     let mcp_url = format!("http://{}/mcp", bind);
+    // ── Design decision: no total HTTP timeout ────────────────────────
+    //
+    // The reqwest client has NO per-request timeout here. MCP tools can
+    // run for up to MAX_WAIT_CEILING_MS (5 minutes), so any fixed HTTP
+    // timeout shorter than that would cause spurious failures for long
+    // tool calls. Server-side tools already enforce their own bounded
+    // timeouts, so the bridge does not need an additional one.
+    //
+    // connect_timeout remains at 10s to fail fast if the server is down.
+    // ──────────────────────────────────────────────────────────────────
     let http_client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
-        .timeout(std::time::Duration::from_secs(120))
         .build()
         .expect("failed to build HTTP client");
-    let mut session_id: Option<String> = None;
+    let session_id: Arc<tokio::sync::Mutex<Option<String>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
 
     let stdin = tokio::io::stdin();
     let mut reader = tokio::io::BufReader::new(stdin);
-    let mut stdout = tokio::io::stdout();
+    // Stdout writes are serialized through an Arc<Mutex> so concurrent
+    // response tasks can write without interleaving.
+    let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
 
     let mut line = String::new();
     loop {
@@ -528,126 +562,187 @@ async fn run_mcp(
             continue;
         }
 
-        // Extract the JSON-RPC request ID so we can echo it in error responses
-        let request_id = serde_json::from_str::<serde_json::Value>(trimmed)
-            .ok()
-            .and_then(|v| v.get("id").cloned())
-            .unwrap_or(serde_json::Value::Null);
+        // ── Design decision: concurrent request dispatch ─────────────
+        //
+        // MCP hosts (e.g., Claude Desktop) may pipeline multiple requests
+        // before the first one completes. A sequential bridge would block
+        // fast queries (list_sessions, get_screen) behind slow tools
+        // (run_command with a 30s wait). We spawn each request into its
+        // own task and write responses to stdout as they arrive. JSON-RPC
+        // response correlation is handled by the `id` field, so ordering
+        // does not matter.
+        // ─────────────────────────────────────────────────────────────
+        let body_str = trimmed.to_string();
+        let client = http_client.clone();
+        let url = mcp_url.clone();
+        let sid = session_id.clone();
+        let tok = token.clone();
+        let out = stdout.clone();
 
-        // Build HTTP request
+        tokio::spawn(async move {
+            mcp_bridge_dispatch(body_str, client, url, sid, tok, out).await;
+        });
+    }
+
+    // ── Cleanup: terminate server-side MCP session ───────────────────
+    //
+    // Send HTTP DELETE to the /mcp endpoint with the session ID so the
+    // server's LocalSessionManager can clean up. Without this, each
+    // `wsh mcp` invocation leaks a session on the server.
+    // ─────────────────────────────────────────────────────────────────
+    let sid_guard = session_id.lock().await;
+    if let Some(ref sid) = *sid_guard {
         let mut req = http_client
-            .post(&mcp_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json, text/event-stream");
-
-        if let Some(ref sid) = session_id {
-            req = req.header("Mcp-Session-Id", sid);
-        }
+            .delete(&mcp_url)
+            .header("Mcp-Session-Id", sid.as_str());
         if let Some(ref t) = token {
             req = req.bearer_auth(t);
         }
-
-        req = req.body(trimmed.to_string());
-
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(?e, "HTTP request to /mcp failed");
-                // Write a JSON-RPC error to stdout, echoing the request ID
-                let err_json = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "error": {
-                        "code": -32603,
-                        "message": format!("HTTP request failed: {e}")
-                    },
-                    "id": request_id
-                });
-                let err_line = format!("{}\n", err_json);
-                tokio::io::AsyncWriteExt::write_all(&mut stdout, err_line.as_bytes())
-                    .await
-                    .map_err(WshError::Io)?;
-                tokio::io::AsyncWriteExt::flush(&mut stdout)
-                    .await
-                    .map_err(WshError::Io)?;
-                continue;
-            }
-        };
-
-        // Capture headers before consuming the body
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        // Capture mcp-session-id from response headers
-        if let Some(sid) = resp.headers().get("mcp-session-id") {
-            if let Ok(s) = sid.to_str() {
-                session_id = Some(s.to_string());
-            }
-        }
-
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-
-        if !status.is_success() && !status.is_informational() {
-            tracing::warn!(status = %status, "MCP endpoint returned error");
-            // Try to pass through the body as-is (it may be a JSON-RPC error)
-            if !body.trim().is_empty() {
-                let out_line = format!("{}\n", body.trim());
-                tokio::io::AsyncWriteExt::write_all(&mut stdout, out_line.as_bytes())
-                    .await
-                    .map_err(WshError::Io)?;
-                tokio::io::AsyncWriteExt::flush(&mut stdout)
-                    .await
-                    .map_err(WshError::Io)?;
-            }
-            continue;
-        }
-
-        // Parse SSE response based on content-type only. The previous body
-        // heuristic (`body.contains("data:")`) caused false positives when
-        // JSON payloads contained the string "data:".
-        if content_type.contains("text/event-stream") {
-            // Parse as SSE
-            for event in body.split("\n\n") {
-                let event = event.trim();
-                if event.is_empty() {
-                    continue;
-                }
-                for event_line in event.lines() {
-                    if let Some(data) = event_line.strip_prefix("data:") {
-                        let json_str = data.trim();
-                        if !json_str.is_empty() {
-                            let out_line = format!("{}\n", json_str);
-                            tokio::io::AsyncWriteExt::write_all(
-                                &mut stdout,
-                                out_line.as_bytes(),
-                            )
-                            .await
-                            .map_err(WshError::Io)?;
-                        }
-                    }
-                }
-            }
-        } else {
-            // Plain JSON response
-            let trimmed_body = body.trim();
-            if !trimmed_body.is_empty() {
-                let out_line = format!("{}\n", trimmed_body);
-                tokio::io::AsyncWriteExt::write_all(&mut stdout, out_line.as_bytes())
-                    .await
-                    .map_err(WshError::Io)?;
-            }
-        }
-        tokio::io::AsyncWriteExt::flush(&mut stdout)
-            .await
-            .map_err(WshError::Io)?;
+        let _ = req.send().await;
+        tracing::debug!("sent MCP session cleanup DELETE");
     }
+    drop(sid_guard);
 
     tracing::info!("wsh mcp stdio bridge exiting");
     Ok(())
+}
+
+/// Dispatch a single MCP JSON-RPC request to the server and write the
+/// response to stdout. Called from a spawned task for concurrency.
+async fn mcp_bridge_dispatch(
+    body_str: String,
+    http_client: reqwest::Client,
+    mcp_url: String,
+    session_id: Arc<tokio::sync::Mutex<Option<String>>>,
+    token: Option<String>,
+    stdout: Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
+) {
+    // Extract the JSON-RPC request ID so we can echo it in error responses
+    let request_id = serde_json::from_str::<serde_json::Value>(&body_str)
+        .ok()
+        .and_then(|v| v.get("id").cloned())
+        .unwrap_or(serde_json::Value::Null);
+
+    // Build HTTP request
+    let mut req = http_client
+        .post(&mcp_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream");
+
+    {
+        let sid = session_id.lock().await;
+        if let Some(ref s) = *sid {
+            req = req.header("Mcp-Session-Id", s.as_str());
+        }
+    }
+    if let Some(ref t) = token {
+        req = req.bearer_auth(t);
+    }
+
+    req = req.body(body_str);
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(?e, "HTTP request to /mcp failed");
+            let err_json = serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32603,
+                    "message": format!("HTTP request failed: {e}")
+                },
+                "id": request_id
+            });
+            let err_line = format!("{}\n", err_json);
+            let mut out = stdout.lock().await;
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, err_line.as_bytes()).await;
+            let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
+
+            // ── Stale session recovery ────────────────────────────────
+            //
+            // If the server restarted, our session ID is stale. On any
+            // connection/transport error, clear the session ID so the
+            // next request re-initializes.
+            // ──────────────────────────────────────────────────────────
+            *session_id.lock().await = None;
+            return;
+        }
+    };
+
+    // Capture headers before consuming the body
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Capture mcp-session-id from response headers
+    if let Some(sid) = resp.headers().get("mcp-session-id") {
+        if let Ok(s) = sid.to_str() {
+            *session_id.lock().await = Some(s.to_string());
+        }
+    }
+
+    let status = resp.status();
+
+    // ── Stale session recovery ────────────────────────────────────────
+    //
+    // If the server returns 404 or another 4xx with our session ID, the
+    // session has expired or the server restarted. Clear the session ID
+    // so the next request starts a fresh MCP session.
+    // ──────────────────────────────────────────────────────────────────
+    if status.as_u16() == 404 || status.as_u16() == 400 {
+        let mut sid = session_id.lock().await;
+        if sid.is_some() {
+            tracing::warn!(status = %status, "server rejected session ID, clearing for re-init");
+            *sid = None;
+        }
+    }
+
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() && !status.is_informational() {
+        tracing::warn!(status = %status, "MCP endpoint returned error");
+        if !body.trim().is_empty() {
+            let out_line = format!("{}\n", body.trim());
+            let mut out = stdout.lock().await;
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, out_line.as_bytes()).await;
+            let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
+        }
+        return;
+    }
+
+    // Parse SSE response based on content-type only.
+    let mut out = stdout.lock().await;
+    if content_type.contains("text/event-stream") {
+        for event in body.split("\n\n") {
+            let event = event.trim();
+            if event.is_empty() {
+                continue;
+            }
+            for event_line in event.lines() {
+                if let Some(data) = event_line.strip_prefix("data:") {
+                    let json_str = data.trim();
+                    if !json_str.is_empty() {
+                        let out_line = format!("{}\n", json_str);
+                        let _ = tokio::io::AsyncWriteExt::write_all(
+                            &mut *out,
+                            out_line.as_bytes(),
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    } else {
+        let trimmed_body = body.trim();
+        if !trimmed_body.is_empty() {
+            let out_line = format!("{}\n", trimmed_body);
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut *out, out_line.as_bytes()).await;
+        }
+    }
+    let _ = tokio::io::AsyncWriteExt::flush(&mut *out).await;
 }
 
 // ── Default mode (no subcommand) ───────────────────────────────────
@@ -771,7 +866,10 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
         Err(_) => {
             tracing::debug!("no server running, acquiring spawn lock");
             let lock_path = socket_path.with_extension("lock");
-            let _lock = acquire_spawn_lock(&lock_path)?;
+            let lp = lock_path.clone();
+            let _lock = tokio::task::spawn_blocking(move || acquire_spawn_lock(&lp))
+                .await
+                .map_err(WshError::TaskJoin)??;
 
             // Re-check after acquiring the lock — another client may have
             // spawned the server while we waited.
