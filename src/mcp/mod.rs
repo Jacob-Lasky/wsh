@@ -20,6 +20,9 @@ use crate::parser::state::Query;
 use crate::pty::SpawnCommand;
 use crate::session::{RegistryError, Session};
 
+/// Maximum allowed value for timeout_ms and max_wait_ms parameters.
+const MAX_WAIT_CEILING_MS: u64 = 300_000; // 5 minutes
+
 use tools::{
     CreateSessionParams, ListSessionsParams, ManageSessionParams, ManageAction,
     SendInputParams, Encoding, GetScreenParams, GetScrollbackParams,
@@ -142,8 +145,8 @@ impl WshMcpServer {
             },
         };
 
-        let rows = params.rows.unwrap_or(24);
-        let cols = params.cols.unwrap_or(80);
+        let rows = params.rows.unwrap_or(24).max(1);
+        let cols = params.cols.unwrap_or(80).max(1);
 
         self.state.sessions.name_available(&params.name).map_err(|e| match e {
             RegistryError::NameExists(n) => ErrorData::invalid_params(
@@ -441,8 +444,8 @@ impl WshMcpServer {
     ) -> Result<CallToolResult, ErrorData> {
         let session = self.get_session(&params.session)?;
 
-        let timeout = Duration::from_millis(params.timeout_ms);
-        let max_wait = Duration::from_millis(params.max_wait_ms);
+        let timeout = Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
+        let max_wait = Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
         match tokio::time::timeout(
             max_wait,
@@ -494,11 +497,14 @@ impl WshMcpServer {
                 None,
             )
         })?;
-        session.activity.touch();
+        // Note: no manual activity.touch() here. The PTY reader calls touch()
+        // when output arrives (including the echo of our input). Adding a manual
+        // touch would gratuitously reset the quiescence timer, forcing agents to
+        // wait the full timeout_ms even for silent commands.
 
         // 2. Await quiescence
-        let timeout = Duration::from_millis(params.timeout_ms);
-        let max_wait = Duration::from_millis(params.max_wait_ms);
+        let timeout = Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
+        let max_wait = Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
         let quiesce_result = tokio::time::timeout(
             max_wait,
@@ -590,39 +596,22 @@ impl WshMcpServer {
         match params.id {
             // UPDATE existing overlay
             Some(id) => {
-                // Patch position/size if any fields provided
-                let has_position_fields = params.x.is_some()
-                    || params.y.is_some()
-                    || params.z.is_some()
-                    || params.width.is_some()
-                    || params.height.is_some()
-                    || background.is_some();
-
-                if has_position_fields {
-                    let found = session.overlays.move_to(
-                        &id,
-                        params.x,
-                        params.y,
-                        params.z,
-                        params.width,
-                        params.height,
-                        background,
-                    );
-                    if !found {
-                        return Err(ErrorData::invalid_params(
-                            format!("overlay not found: {id}"),
-                            None,
-                        ));
-                    }
-                }
-
-                // Replace spans if provided
-                if let Some(spans) = spans {
-                    match session.overlays.update(&id, spans) {
-                        Err(e) => return Err(ErrorData::invalid_params(e.to_string(), None)),
-                        Ok(false) => return Err(ErrorData::invalid_params(format!("overlay not found: {id}"), None)),
-                        Ok(true) => {}
-                    }
+                // Atomically patch position/size/spans under a single lock
+                // to prevent race conditions where another client could
+                // delete the overlay between separate move_to and update calls.
+                match session.overlays.patch(
+                    &id,
+                    params.x,
+                    params.y,
+                    params.z,
+                    params.width,
+                    params.height,
+                    background,
+                    spans,
+                ) {
+                    Err(e) => return Err(ErrorData::invalid_params(e.to_string(), None)),
+                    Ok(false) => return Err(ErrorData::invalid_params(format!("overlay not found: {id}"), None)),
+                    Ok(true) => {}
                 }
 
                 let _ = session

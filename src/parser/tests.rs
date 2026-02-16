@@ -1,13 +1,24 @@
 // src/parser/tests.rs
 use super::*;
-use crate::broker::Broker;
 use state::Format;
+use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+
+/// Parser channel capacity used in tests. Matches the production value
+/// in session.rs but is defined separately so tests don't depend on it.
+const TEST_PARSER_CHANNEL_CAPACITY: usize = 256;
+
+/// Helper: create a bounded parser channel and spawn a parser.
+/// Returns (sender, parser) so tests can feed data via `tx.send().await`.
+async fn spawn_test_parser(cols: usize, rows: usize, scrollback_limit: usize) -> (mpsc::Sender<bytes::Bytes>, Parser) {
+    let (tx, rx) = mpsc::channel(TEST_PARSER_CHANNEL_CAPACITY);
+    let parser = Parser::spawn(rx, cols, rows, scrollback_limit);
+    (tx, parser)
+}
 
 #[tokio::test]
 async fn test_parser_spawn() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     // Should be able to query immediately
     let response = parser
@@ -28,8 +39,7 @@ async fn test_parser_spawn() {
 
 #[tokio::test]
 async fn test_parser_query_cursor() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     let response = parser.query(Query::Cursor).await.unwrap();
 
@@ -44,11 +54,10 @@ async fn test_parser_query_cursor() {
 
 #[tokio::test]
 async fn test_parser_processes_input() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
-    // Send some text through the broker
-    broker.publish(bytes::Bytes::from("Hello, World!"));
+    // Send some text through the parser channel
+    tx.send(bytes::Bytes::from("Hello, World!")).await.unwrap();
 
     // Give the parser time to process
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -73,8 +82,7 @@ async fn test_parser_processes_input() {
 
 #[tokio::test]
 async fn test_parser_resize() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     // Resize
     parser.resize(120, 40).await.unwrap();
@@ -98,12 +106,11 @@ async fn test_parser_resize() {
 
 #[tokio::test]
 async fn test_parser_scrollback() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen for testing
+    let (tx, parser) = spawn_test_parser(80, 5, 100).await;
 
     // Send enough lines to create scrollback
     for i in 0..10 {
-        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+        tx.send(bytes::Bytes::from(format!("Line {}\r\n", i))).await.unwrap();
     }
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -128,12 +135,11 @@ async fn test_parser_scrollback() {
 
 #[tokio::test]
 async fn test_scrollback_includes_all_lines() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen for testing
+    let (tx, parser) = spawn_test_parser(80, 5, 100).await;
 
     // Send enough lines to create scrollback
     for i in 0..10 {
-        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+        tx.send(bytes::Bytes::from(format!("Line {}\r\n", i))).await.unwrap();
     }
 
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -177,13 +183,12 @@ async fn test_scrollback_includes_all_lines() {
 
 #[tokio::test]
 async fn test_parser_event_stream() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     let mut events = parser.subscribe();
 
     // Send text
-    broker.publish(bytes::Bytes::from("Test"));
+    tx.send(bytes::Bytes::from("Test")).await.unwrap();
 
     // Should receive events
     let event = tokio::time::timeout(
@@ -197,13 +202,12 @@ async fn test_parser_event_stream() {
 
 #[tokio::test]
 async fn test_line_event_includes_total_lines() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     let mut events = parser.subscribe();
 
     // Send text to trigger a line event
-    broker.publish(bytes::Bytes::from("Hello"));
+    tx.send(bytes::Bytes::from("Hello")).await.unwrap();
 
     // Get the line event
     let sub_event = tokio::time::timeout(
@@ -224,12 +228,11 @@ async fn test_line_event_includes_total_lines() {
 
 #[tokio::test]
 async fn test_scrollback_when_in_alternate_screen() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen for testing
+    let (tx, parser) = spawn_test_parser(80, 5, 100).await;
 
     // Send enough lines to create scrollback
     for i in 0..10 {
-        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+        tx.send(bytes::Bytes::from(format!("Line {}\r\n", i))).await.unwrap();
     }
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -250,7 +253,7 @@ async fn test_scrollback_when_in_alternate_screen() {
     assert!(scrollback_before > 0, "Should have scrollback before alternate screen");
 
     // Enter alternate screen mode (DECSET 1049 or smcup)
-    broker.publish(bytes::Bytes::from("\x1b[?1049h")); // Enter alternate screen
+    tx.send(bytes::Bytes::from("\x1b[?1049h")).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // Query scrollback while in alternate screen
@@ -274,7 +277,7 @@ async fn test_scrollback_when_in_alternate_screen() {
     assert_eq!(scrollback_in_alternate, 5, "Alternate screen should have screen-size lines");
 
     // Exit alternate screen mode (DECRST 1049 or rmcup)
-    broker.publish(bytes::Bytes::from("\x1b[?1049l")); // Exit alternate screen
+    tx.send(bytes::Bytes::from("\x1b[?1049l")).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // Query scrollback after exiting alternate screen
@@ -298,8 +301,7 @@ async fn test_scrollback_when_in_alternate_screen() {
 
 #[tokio::test]
 async fn test_alternate_active_in_screen_response() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     // Initially not in alternate screen
     let response = parser
@@ -317,7 +319,7 @@ async fn test_alternate_active_in_screen_response() {
     }
 
     // Enter alternate screen mode
-    broker.publish(bytes::Bytes::from("\x1b[?1049h"));
+    tx.send(bytes::Bytes::from("\x1b[?1049h")).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let response = parser
@@ -335,7 +337,7 @@ async fn test_alternate_active_in_screen_response() {
     }
 
     // Exit alternate screen mode
-    broker.publish(bytes::Bytes::from("\x1b[?1049l"));
+    tx.send(bytes::Bytes::from("\x1b[?1049l")).await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     let response = parser
@@ -355,13 +357,12 @@ async fn test_alternate_active_in_screen_response() {
 
 #[tokio::test]
 async fn test_alternate_screen_emits_mode_event() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (tx, parser) = spawn_test_parser(80, 24, 1000).await;
 
     let mut events = parser.subscribe();
 
     // Enter alternate screen
-    broker.publish(bytes::Bytes::from("\x1b[?1049h"));
+    tx.send(bytes::Bytes::from("\x1b[?1049h")).await.unwrap();
 
     // Collect events until we find a Mode event
     let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
@@ -377,7 +378,7 @@ async fn test_alternate_screen_emits_mode_event() {
     assert!(mode_event, "Mode event should indicate alternate_active = true");
 
     // Exit alternate screen
-    broker.publish(bytes::Bytes::from("\x1b[?1049l"));
+    tx.send(bytes::Bytes::from("\x1b[?1049l")).await.unwrap();
 
     let mode_event = tokio::time::timeout(tokio::time::Duration::from_millis(200), async {
         loop {
@@ -394,12 +395,11 @@ async fn test_alternate_screen_emits_mode_event() {
 
 #[tokio::test]
 async fn test_screen_response_includes_line_indices() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 5, 100); // Small screen
+    let (tx, parser) = spawn_test_parser(80, 5, 100).await;
 
     // Send enough lines to create scrollback
     for i in 0..10 {
-        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+        tx.send(bytes::Bytes::from(format!("Line {}\r\n", i))).await.unwrap();
     }
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -414,6 +414,32 @@ async fn test_screen_response_includes_line_indices() {
             // (lines 0-4 in scrollback, lines 5-9 visible)
             assert!(screen.first_line_index > 0, "should have scrollback");
             assert_eq!(screen.total_lines, screen.first_line_index + screen.lines.len());
+        }
+        _ => panic!("expected Screen response"),
+    }
+}
+
+#[tokio::test]
+async fn test_parser_channel_does_not_lose_data() {
+    let (tx, parser) = spawn_test_parser(80, 24, 1000).await;
+
+    // Send 200 messages — all should reach the parser without loss
+    for i in 0..200 {
+        tx.send(bytes::Bytes::from(format!("msg-{i}\r\n"))).await.unwrap();
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    let response = parser
+        .query(Query::Screen { format: Format::Plain })
+        .await
+        .unwrap();
+
+    match response {
+        QueryResponse::Screen(screen) => {
+            // total_lines should account for all 200 lines (plus the empty
+            // line the cursor sits on after the final \r\n)
+            assert!(screen.total_lines >= 200, "should have at least 200 total lines, got {}", screen.total_lines);
         }
         _ => panic!("expected Screen response"),
     }

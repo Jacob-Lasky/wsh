@@ -213,6 +213,66 @@ impl OverlayStore {
         }
     }
 
+    /// Atomically patch an overlay's position/size and optionally replace its spans.
+    ///
+    /// Performs both operations under a single write lock, preventing a race
+    /// where another client could delete the overlay between a `move_to` and
+    /// `update` call. Returns false if the overlay does not exist.
+    #[allow(clippy::too_many_arguments)]
+    pub fn patch(
+        &self,
+        id: &str,
+        x: Option<u16>,
+        y: Option<u16>,
+        z: Option<i32>,
+        width: Option<u16>,
+        height: Option<u16>,
+        background: Option<BackgroundStyle>,
+        spans: Option<Vec<OverlaySpan>>,
+    ) -> Result<bool, &'static str> {
+        if let Some(ref s) = spans {
+            validate_spans(s)?;
+        }
+        let mut inner = self.inner.write();
+        if !inner.overlays.contains_key(id) {
+            return Ok(false);
+        }
+        // Apply all mutations under a single lock. We use two separate
+        // get_mut calls to satisfy the borrow checker (next_z update
+        // needs &mut inner while overlay ref also borrows &mut inner).
+        {
+            let overlay = inner.overlays.get_mut(id).unwrap();
+            if let Some(x) = x {
+                overlay.x = x;
+            }
+            if let Some(y) = y {
+                overlay.y = y;
+            }
+            if let Some(z) = z {
+                overlay.z = z;
+            }
+            if let Some(width) = width {
+                overlay.width = width;
+            }
+            if let Some(height) = height {
+                overlay.height = height;
+            }
+            if let Some(background) = background {
+                overlay.background = Some(background);
+            }
+            if let Some(spans) = spans {
+                overlay.spans = spans;
+            }
+        }
+        // Update next_z tracking after dropping the overlay reference
+        if let Some(z) = z {
+            if z >= inner.next_z {
+                inner.next_z = z.saturating_add(1);
+            }
+        }
+        Ok(true)
+    }
+
     /// Delete an overlay by ID, returns true if it existed
     pub fn delete(&self, id: &str) -> bool {
         let mut inner = self.inner.write();

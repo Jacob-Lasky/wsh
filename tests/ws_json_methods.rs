@@ -17,10 +17,11 @@ use wsh::{
     shutdown::ShutdownCoordinator,
 };
 
-fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
+fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, mpsc::Sender<Bytes>) {
     let (input_tx, input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -50,7 +51,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>) {
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
-    (state, input_rx)
+    (state, input_rx, parser_tx)
 }
 
 async fn start_server(app: axum::Router) -> SocketAddr {
@@ -85,7 +86,7 @@ async fn recv_json(
 
 #[tokio::test]
 async fn test_ws_method_get_input_mode() {
-    let (state, _rx) = create_test_state();
+    let (state, _rx, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -113,7 +114,7 @@ async fn test_ws_method_get_input_mode() {
 
 #[tokio::test]
 async fn test_ws_method_get_screen() {
-    let (state, _rx) = create_test_state();
+    let (state, _rx, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -138,7 +139,7 @@ async fn test_ws_method_get_screen() {
 
 #[tokio::test]
 async fn test_ws_method_send_input() {
-    let (state, mut input_rx) = create_test_state();
+    let (state, mut input_rx, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -171,7 +172,8 @@ async fn test_ws_method_send_input() {
 async fn test_ws_subscribe_then_events() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -231,7 +233,8 @@ async fn test_ws_subscribe_then_events() {
     let sync = recv_json(&mut rx).await;
     assert_eq!(sync["event"], "sync");
 
-    // Now push data via broker.publish() to reach both broadcast and parser channels
+    // Send to parser channel and broadcast to reach both parser and subscribers
+    _parser_tx.send(Bytes::from("Hello\r\n")).await.unwrap();
     broker.publish(Bytes::from("Hello\r\n"));
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -252,7 +255,7 @@ async fn test_ws_subscribe_then_events() {
 
 #[tokio::test]
 async fn test_ws_unknown_method() {
-    let (state, _rx) = create_test_state();
+    let (state, _rx, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -276,7 +279,7 @@ async fn test_ws_unknown_method() {
 
 #[tokio::test]
 async fn test_ws_malformed_request() {
-    let (state, _rx) = create_test_state();
+    let (state, _rx, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -301,7 +304,8 @@ async fn test_ws_malformed_request() {
 async fn test_ws_methods_interleaved_with_events() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -356,7 +360,8 @@ async fn test_ws_methods_interleaved_with_events() {
     let _ = recv_json(&mut rx).await; // sync event
 
     // Now send a method call WHILE events could be flowing
-    // Use broker.publish() to reach both broadcast and parser channels
+    // Send to parser channel and broadcast to reach both parser and subscribers
+    _parser_tx.send(Bytes::from("data\r\n")).await.unwrap();
     broker.publish(Bytes::from("data\r\n"));
     tokio::time::sleep(Duration::from_millis(50)).await;
 

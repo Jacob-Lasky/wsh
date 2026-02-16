@@ -65,7 +65,8 @@ async fn test_concurrent_input_from_multiple_sources() {
         }
     });
 
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -227,7 +228,8 @@ async fn test_rapid_http_requests() {
         }
     });
 
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx2, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,

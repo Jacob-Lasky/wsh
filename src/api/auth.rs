@@ -1,4 +1,5 @@
 use axum::{extract::Request, middleware::Next, response::Response};
+use subtle::ConstantTimeEq;
 
 use super::error::ApiError;
 
@@ -33,8 +34,17 @@ pub async fn require_auth(
 ) -> Result<Response, ApiError> {
     match extract_token(&req) {
         None => Err(ApiError::AuthRequired),
-        Some(ref token) if token != &expected_token => Err(ApiError::AuthInvalid),
-        Some(_) => Ok(next.run(req).await),
+        Some(ref token) => {
+            // Constant-time comparison to prevent timing side-channel attacks.
+            // wsh exposes full terminal access (arbitrary command execution),
+            // so token compromise means complete machine compromise when bound
+            // to a non-localhost address.
+            if token.as_bytes().ct_eq(expected_token.as_bytes()).into() {
+                Ok(next.run(req).await)
+            } else {
+                Err(ApiError::AuthInvalid)
+            }
+        }
     }
 }
 

@@ -6,11 +6,12 @@ use wsh::parser::Parser;
 
 #[tokio::test]
 async fn test_parser_with_ansi_sequences() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let _broker = Broker::new();
+    let (_parser_tx, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
 
     // Send colored text
-    broker.publish(Bytes::from("\x1b[31mRed Text\x1b[0m Normal"));
+    _parser_tx.send(Bytes::from("\x1b[31mRed Text\x1b[0m Normal")).await.unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -66,11 +67,12 @@ async fn test_parser_with_ansi_sequences() {
 
 #[tokio::test]
 async fn test_parser_cursor_movement() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let _broker = Broker::new();
+    let (_parser_tx, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
 
     // Move cursor to row 5, col 10
-    broker.publish(Bytes::from("\x1b[5;10H"));
+    _parser_tx.send(Bytes::from("\x1b[5;10H")).await.unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -88,10 +90,11 @@ async fn test_parser_cursor_movement() {
 
 #[tokio::test]
 async fn test_parser_plain_vs_styled() {
-    let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let _broker = Broker::new();
+    let (_parser_tx, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
 
-    broker.publish(Bytes::from("\x1b[1mBold\x1b[0m"));
+    _parser_tx.send(Bytes::from("\x1b[1mBold\x1b[0m")).await.unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 

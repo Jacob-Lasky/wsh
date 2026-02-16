@@ -63,19 +63,21 @@ pub async fn run(
                         }
 
                         // Emit line events for changed lines.
-                        // Collect lines once into a Vec for O(1) indexed access
-                        // instead of O(n) per `.nth()` call.
-                        let all_lines: Vec<_> = vt.lines().collect();
-                        let total_lines = all_lines.len();
-                        for line_idx in changed_lines {
-                            if let Some(line) = all_lines.get(line_idx) {
-                                seq = seq.wrapping_add(1);
-                                let _ = event_tx.send(Event::Line {
-                                    seq,
-                                    index: line_idx,
-                                    total_lines,
-                                    line: format_line(line, true),
-                                });
+                        // Only collect all lines when there are actual changes
+                        // to avoid O(n) iteration on every PTY chunk.
+                        if !changed_lines.is_empty() {
+                            let all_lines: Vec<_> = vt.lines().collect();
+                            let total_lines = all_lines.len();
+                            for line_idx in changed_lines {
+                                if let Some(line) = all_lines.get(line_idx) {
+                                    seq = seq.wrapping_add(1);
+                                    let _ = event_tx.send(Event::Line {
+                                        seq,
+                                        index: line_idx,
+                                        total_lines,
+                                        line: format_line(line, true),
+                                    });
+                                }
                             }
                         }
 
@@ -147,16 +149,17 @@ fn handle_query(
             limit,
         } => {
             let styled = matches!(format, Format::Styled);
-            let total_lines = vt.lines().count();
 
-            // Return all lines (history + current screen), applying offset/limit
-            // In alternate screen mode, this returns just the current screen
-            // since the alternate buffer has no scrollback history
-            let lines: Vec<_> = vt
-                .lines()
+            // Collect lines once to avoid iterating twice (once for count,
+            // once for skip/take). With 10k+ scrollback lines, the double
+            // iteration adds measurable latency for agents reading scrollback.
+            let all_lines: Vec<_> = vt.lines().collect();
+            let total_lines = all_lines.len();
+            let lines: Vec<_> = all_lines
+                .into_iter()
                 .skip(offset)
                 .take(limit)
-                .map(|l| format_line(l, styled))
+                .map(|l| format_line(&l, styled))
                 .collect();
 
             QueryResponse::Scrollback(ScrollbackResponse {

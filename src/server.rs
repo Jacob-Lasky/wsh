@@ -190,11 +190,14 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         io::Error::new(io::ErrorKind::AlreadyExists, e.to_string())
     })?;
 
+    let rows = msg.rows.max(1);
+    let cols = msg.cols.max(1);
+
     let (session, child_exit_rx) = Session::spawn_with_options(
         msg.name.clone().unwrap_or_default(),
         command,
-        msg.rows,
-        msg.cols,
+        rows,
+        cols,
         msg.cwd,
         msg.env,
     )
@@ -214,8 +217,8 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
     let resp = CreateSessionResponseMsg {
         name: name.clone(),
         pid: session.pid,
-        rows: msg.rows,
-        cols: msg.cols,
+        rows,
+        cols,
     };
     let resp_frame = Frame::control(FrameType::CreateSessionResponse, &resp)
         .map_err(io::Error::other)?;
@@ -253,11 +256,13 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         }
     };
 
-    // Resize session to match client terminal
-    if let Err(e) = session.pty.lock().resize(msg.rows, msg.cols) {
+    // Resize session to match client terminal (clamp to min 1 to avoid zero-size PTY)
+    let rows = msg.rows.max(1);
+    let cols = msg.cols.max(1);
+    if let Err(e) = session.pty.lock().resize(rows, cols) {
         tracing::warn!(?e, "failed to resize PTY on attach");
     }
-    if let Err(e) = session.parser.resize(msg.cols as usize, msg.rows as usize).await {
+    if let Err(e) = session.parser.resize(cols as usize, rows as usize).await {
         tracing::warn!(?e, "failed to resize parser on attach");
     }
 
@@ -701,13 +706,15 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                             }
                             FrameType::Resize => {
                                 if let Ok(msg) = f.parse_json::<ResizeMsg>() {
-                                    terminal_size.set(msg.rows, msg.cols);
-                                    if let Err(e) = pty.lock().resize(msg.rows, msg.cols) {
+                                    let rows = msg.rows.max(1);
+                                    let cols = msg.cols.max(1);
+                                    terminal_size.set(rows, cols);
+                                    if let Err(e) = pty.lock().resize(rows, cols) {
                                         tracing::warn!(?e, "failed to resize PTY");
                                     }
                                     if let Err(e) = parser.resize(
-                                        msg.cols as usize,
-                                        msg.rows as usize,
+                                        cols as usize,
+                                        rows as usize,
                                     ).await {
                                         tracing::warn!(?e, "failed to resize parser");
                                     }

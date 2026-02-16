@@ -18,7 +18,7 @@ use wsh::api::router;
 
 #[tokio::test]
 async fn test_input_capture_flow() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Step 1: Verify default mode is passthrough
@@ -113,7 +113,7 @@ async fn test_input_capture_flow() {
 
 #[tokio::test]
 async fn test_input_capture_idempotent() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Capture multiple times should be idempotent
@@ -188,7 +188,7 @@ async fn test_input_capture_idempotent() {
 
 #[tokio::test]
 async fn test_input_mode_wrong_method() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // POST on /input/mode should fail (only GET is allowed)
@@ -239,7 +239,7 @@ async fn test_input_mode_wrong_method() {
 #[tokio::test]
 async fn test_input_mode_state_shared_across_requests() {
     // Test that state is properly shared across multiple requests
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Capture mode
@@ -278,7 +278,7 @@ async fn test_input_mode_state_shared_across_requests() {
 
 #[tokio::test]
 async fn test_focus_and_unfocus_flow() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create a focusable overlay
@@ -403,7 +403,7 @@ async fn test_focus_and_unfocus_flow() {
 
 #[tokio::test]
 async fn test_focus_cleared_on_input_release() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create a focusable overlay
@@ -515,7 +515,7 @@ async fn test_focus_cleared_on_input_release() {
 
 #[tokio::test]
 async fn test_focus_cleared_on_element_delete() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create a focusable overlay
@@ -615,7 +615,7 @@ async fn test_focus_cleared_on_element_delete() {
 
 #[tokio::test]
 async fn test_focus_non_focusable_returns_400() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create a non-focusable overlay (focusable defaults to false)

@@ -88,9 +88,11 @@ pub fn compute_layout(panels: &[Panel], terminal_rows: u16, terminal_cols: u16) 
     );
     let pty_rows = terminal_rows.saturating_sub(top_height).saturating_sub(bottom_height);
 
-    // DECSTBM uses 1-indexed rows
+    // DECSTBM uses 1-indexed rows. Use saturating_sub for consistency
+    // with the pty_rows calculation above (even though the debug_assert
+    // guarantees the invariant holds, release builds skip the assert).
     let scroll_region_top = top_height + 1;
-    let scroll_region_bottom = terminal_rows - bottom_height;
+    let scroll_region_bottom = terminal_rows.saturating_sub(bottom_height);
 
     Layout {
         top_panels: visible_top,

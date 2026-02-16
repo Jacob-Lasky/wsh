@@ -24,7 +24,7 @@ async fn json_body(response: axum::http::Response<Body>) -> serde_json::Value {
 
 #[tokio::test]
 async fn test_alt_screen_enter_exit_flow() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Verify default mode is normal
@@ -107,7 +107,7 @@ async fn test_alt_screen_enter_exit_flow() {
 
 #[tokio::test]
 async fn test_alt_screen_enter_when_already_alt_returns_409() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Enter alt screen
@@ -145,7 +145,7 @@ async fn test_alt_screen_enter_when_already_alt_returns_409() {
 
 #[tokio::test]
 async fn test_alt_screen_exit_when_normal_returns_409() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Try to exit alt when already in normal mode -- should return 409
@@ -168,7 +168,7 @@ async fn test_alt_screen_exit_when_normal_returns_409() {
 
 #[tokio::test]
 async fn test_alt_screen_elements_destroyed_on_exit() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Enter alt screen
@@ -329,7 +329,7 @@ async fn test_alt_screen_elements_destroyed_on_exit() {
 
 #[tokio::test]
 async fn test_alt_screen_mode_filters_list() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create an overlay in normal mode

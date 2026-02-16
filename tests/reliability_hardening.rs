@@ -232,7 +232,7 @@ async fn test_scrollback_large_limit_does_not_panic() {
     // Verify that querying scrollback with a very large limit does not
     // crash or panic. The actual cap enforcement is in the HTTP/MCP handler
     // layer, but the parser must handle large values gracefully.
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Query scrollback with limit=100000 -- should succeed (capped or not)

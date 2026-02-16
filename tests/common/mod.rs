@@ -18,6 +18,9 @@ pub struct TestSession {
     pub session: Session,
     pub input_rx: mpsc::Receiver<Bytes>,
     pub broker: Broker,
+    /// Keeps the parser channel open. Send data here to feed the parser
+    /// directly (instead of through a PTY).
+    pub parser_tx: mpsc::Sender<Bytes>,
 }
 
 /// Create a test session with default 24x80 dimensions.
@@ -29,7 +32,8 @@ pub fn create_test_session(name: &str) -> TestSession {
 pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSession {
     let (input_tx, input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, cols as usize, rows as usize, 1000);
+    let (parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, cols as usize, rows as usize, 1000);
     let session = Session {
         name: name.to_string(),
         pid: None,
@@ -59,18 +63,20 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         session,
         input_rx,
         broker,
+        parser_tx,
     }
 }
 
 /// Create a test AppState with a single "test" session.
-pub fn create_test_state() -> (wsh::api::AppState, mpsc::Receiver<Bytes>, broadcast::Sender<Bytes>) {
+pub fn create_test_state() -> (wsh::api::AppState, mpsc::Receiver<Bytes>, broadcast::Sender<Bytes>, mpsc::Sender<Bytes>) {
     create_test_state_with_size(24, 80)
 }
 
 /// Create a test AppState with a single "test" session of custom dimensions.
-pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState, mpsc::Receiver<Bytes>, broadcast::Sender<Bytes>) {
+pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState, mpsc::Receiver<Bytes>, broadcast::Sender<Bytes>, mpsc::Sender<Bytes>) {
     let ts = create_test_session_with_size("test", rows, cols);
     let output_tx = ts.broker.sender();
+    let parser_tx = ts.parser_tx;
     let registry = SessionRegistry::new();
     registry.insert(Some("test".into()), ts.session).unwrap();
     let state = wsh::api::AppState {
@@ -78,5 +84,5 @@ pub fn create_test_state_with_size(rows: u16, cols: u16) -> (wsh::api::AppState,
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(wsh::api::ServerConfig::new(false)),
     };
-    (state, ts.input_rx, output_tx)
+    (state, ts.input_rx, output_tx, parser_tx)
 }

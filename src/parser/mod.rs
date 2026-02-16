@@ -15,7 +15,6 @@ use tokio_stream::{Stream, StreamExt};
 
 use bytes::Bytes;
 
-use crate::broker::Broker;
 use events::Event;
 use state::{Query, QueryResponse};
 
@@ -47,19 +46,20 @@ pub enum ParserError {
 pub struct Parser {
     query_tx: mpsc::Sender<(Query, oneshot::Sender<QueryResponse>)>,
     event_tx: broadcast::Sender<Event>,
-    /// Holds the parser's dedicated mpsc sender alive. As long as
-    /// the `Parser` (or any clone) exists, the channel stays open
-    /// and the parser task will not exit due to a closed channel.
-    _raw_tx: mpsc::Sender<Bytes>,
 }
 
 impl Parser {
-    /// Spawn parser task, subscribing to raw byte broker
-    pub fn spawn(raw_broker: &Broker, cols: usize, rows: usize, scrollback_limit: usize) -> Self {
+    /// Spawn parser task that consumes raw PTY bytes from the given channel.
+    ///
+    /// The caller creates the bounded channel and passes only the receiver here.
+    /// The sender half is held by the PTY reader thread, which uses
+    /// `blocking_send()` to apply backpressure when the parser can't keep up.
+    /// See the design decision comment in `Session::spawn_with_options()` for
+    /// the full rationale.
+    pub fn spawn(mut raw_rx: mpsc::Receiver<Bytes>, cols: usize, rows: usize, scrollback_limit: usize) -> Self {
         let (query_tx, query_rx) = mpsc::channel(32);
         let (event_tx, _) = broadcast::channel(256);
 
-        let (raw_tx, mut raw_rx) = raw_broker.subscribe_parser();
         let event_tx_clone = event_tx.clone();
 
         tokio::spawn(async move {
@@ -99,7 +99,6 @@ impl Parser {
         Self {
             query_tx,
             event_tx,
-            _raw_tx: raw_tx,
         }
     }
 

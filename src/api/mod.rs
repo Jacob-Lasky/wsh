@@ -175,7 +175,8 @@ mod tests {
     fn create_test_state() -> (AppState, mpsc::Receiver<Bytes>, String) {
         let (input_tx, input_rx) = mpsc::channel(64);
         let broker = Broker::new();
-        let parser = Parser::spawn(&broker, 80, 24, 1000);
+        let (_parser_tx, parser_rx) = mpsc::channel(256);
+        let parser = Parser::spawn(parser_rx, 80, 24, 1000);
         let session = crate::session::Session {
             name: "test".to_string(),
             pid: None,

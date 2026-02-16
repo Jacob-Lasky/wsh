@@ -31,7 +31,8 @@ use wsh::shutdown::ShutdownCoordinator;
 fn create_test_app() -> (axum::Router, mpsc::Receiver<Bytes>, broadcast::Sender<Bytes>) {
     let (input_tx, input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -130,7 +131,8 @@ async fn test_api_input_multiple_requests() {
     // Test that multiple sequential inputs are all forwarded correctly
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -222,7 +224,8 @@ async fn test_websocket_receives_pty_output() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let output_tx = broker.sender();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -286,7 +289,8 @@ async fn test_websocket_receives_pty_output() {
 async fn test_websocket_sends_input_to_pty() {
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -346,7 +350,8 @@ async fn test_websocket_text_input_to_pty() {
     // Test that text messages are also handled
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -405,7 +410,8 @@ async fn test_websocket_bidirectional_communication() {
     let (input_tx, mut input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let output_tx = broker.sender();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -483,7 +489,8 @@ async fn test_websocket_multiple_outputs() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
     let output_tx = broker.sender();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -608,7 +615,8 @@ async fn test_websocket_line_event_includes_total_lines() {
     // Setup similar to other WebSocket tests
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -661,7 +669,8 @@ async fn test_websocket_line_event_includes_total_lines() {
     // Read sync event
     let _ = ws_stream.next().await;
 
-    // Publish text via broker.publish() to reach both broadcast and parser channels
+    // Send text to parser channel and broadcast to reach both parser and subscribers
+    _parser_tx.send(bytes::Bytes::from("Hello test\r\n")).await.unwrap();
     broker.publish(bytes::Bytes::from("Hello test\r\n"));
 
     // Look for a line event with total_lines field
@@ -696,7 +705,8 @@ async fn test_websocket_line_event_includes_total_lines() {
 async fn test_scrollback_endpoint() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 5, 1000); // 5-row screen to get scrollback quickly
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 5, 1000); // 5-row screen to get scrollback quickly
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -725,9 +735,9 @@ async fn test_scrollback_endpoint() {
     let app = router(state, None);
 
     // Send enough lines to create scrollback (more than 5 rows)
-    // Use broker.publish() to reach both broadcast and parser channels
+    // Send to parser channel so terminal state is updated
     for i in 0..20 {
-        broker.publish(bytes::Bytes::from(format!("Line {}\r\n", i)));
+        _parser_tx.send(bytes::Bytes::from(format!("Line {}\r\n", i))).await.unwrap();
     }
 
     // Wait for parser to process
@@ -764,7 +774,8 @@ async fn test_scrollback_endpoint() {
 async fn test_scrollback_initial_state() {
     let (input_tx, _input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,

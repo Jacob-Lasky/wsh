@@ -1,62 +1,44 @@
-use std::sync::Arc;
-
 use bytes::Bytes;
-use parking_lot::Mutex;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 pub const BROADCAST_CAPACITY: usize = 64;
 
-/// Capacity for the dedicated parser channel. Each message is typically
-/// a small PTY chunk (~4 KiB), so 4096 messages ≈ 16 MiB max buffered.
-const PARSER_CHANNEL_CAPACITY: usize = 4096;
-
+/// Distributes PTY output to streaming API clients via a broadcast channel.
+///
+/// The broadcast channel is lossy by design: if a subscriber falls behind,
+/// it receives a `Lagged` error and must re-query state. This is fine for
+/// streaming clients (WebSocket, socket) because they can recover by
+/// re-fetching the current screen.
+///
+/// # Parser channel is NOT here
+///
+/// The parser's dedicated bounded channel lives in `Session::spawn_with_options()`
+/// (session.rs), not in the broker. See the design decision comment there for
+/// the full rationale. The short version: the parser channel uses `blocking_send()`
+/// for PTY backpressure, which requires the sender to be in the PTY reader's
+/// blocking thread — not in a method called from arbitrary contexts.
 #[derive(Clone)]
 pub struct Broker {
     tx: broadcast::Sender<Bytes>,
-    parser_tx: mpsc::Sender<Bytes>,
-    parser_rx: Arc<Mutex<Option<mpsc::Receiver<Bytes>>>>,
 }
 
 impl Broker {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        let (parser_tx, parser_rx) = mpsc::channel(PARSER_CHANNEL_CAPACITY);
-        Self {
-            tx,
-            parser_tx,
-            parser_rx: Arc::new(Mutex::new(Some(parser_rx))),
-        }
+        Self { tx }
     }
 
+    /// Publish PTY output to streaming clients.
+    ///
+    /// This is non-blocking and lossy: lagged subscribers get dropped messages.
+    /// The parser receives data through a separate bounded channel with
+    /// backpressure (see session.rs), NOT through this broadcast.
     pub fn publish(&self, data: Bytes) {
-        match self.parser_tx.try_send(data.clone()) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("parser channel full, dropping data (parser may be stalled)");
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::debug!("parser channel closed (parser task exited)");
-            }
-        }
-        // Ignore error - means no receivers
         let _ = self.tx.send(data);
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Bytes> {
         self.tx.subscribe()
-    }
-
-    /// Take the dedicated parser channel out of the broker.
-    ///
-    /// The parser is singular -- this method panics if called more than once.
-    /// Returns both halves: the sender (so the caller can keep the channel alive)
-    /// and the receiver.
-    pub fn subscribe_parser(&self) -> (mpsc::Sender<Bytes>, mpsc::Receiver<Bytes>) {
-        let rx = self.parser_rx
-            .lock()
-            .take()
-            .expect("subscribe_parser() called more than once");
-        (self.parser_tx.clone(), rx)
     }
 
     pub fn sender(&self) -> broadcast::Sender<Bytes> {
@@ -167,43 +149,5 @@ mod tests {
 
         let received = rx.recv().await.expect("should receive message from clone");
         assert_eq!(received, Bytes::from("from clone"));
-    }
-
-    #[tokio::test]
-    async fn test_parser_channel_receives_independently() {
-        let broker = Broker::new();
-        let (_parser_tx, mut parser_rx) = broker.subscribe_parser();
-        let mut broadcast_rx = broker.subscribe();
-
-        broker.publish(Bytes::from("hello"));
-
-        let parser_msg = parser_rx.recv().await.expect("parser should receive");
-        assert_eq!(parser_msg, Bytes::from("hello"));
-
-        let broadcast_msg = broadcast_rx.recv().await.expect("broadcast should receive");
-        assert_eq!(broadcast_msg, Bytes::from("hello"));
-    }
-
-    #[tokio::test]
-    async fn test_parser_channel_does_not_lag() {
-        let broker = Broker::new();
-        let (_parser_tx, mut parser_rx) = broker.subscribe_parser();
-
-        for i in 0..200 {
-            broker.publish(Bytes::from(format!("msg-{i}")));
-        }
-
-        for i in 0..200 {
-            let msg = parser_rx.recv().await.expect("parser should not lose data");
-            assert_eq!(msg, Bytes::from(format!("msg-{i}")));
-        }
-    }
-
-    #[tokio::test]
-    #[should_panic(expected = "subscribe_parser() called more than once")]
-    async fn test_subscribe_parser_panics_on_second_call() {
-        let broker = Broker::new();
-        let _rx1 = broker.subscribe_parser(); // takes (Sender, Receiver)
-        let _rx2 = broker.subscribe_parser(); // should panic
     }
 }

@@ -13,12 +13,12 @@ use tower::ServiceExt;
 use wsh::api::router;
 
 fn create_test_state() -> wsh::api::AppState {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     state
 }
 
 fn create_test_state_with_size(rows: u16, cols: u16) -> wsh::api::AppState {
-    let (state, _, _) = common::create_test_state_with_size(rows, cols);
+    let (state, _, _, _ptx) = common::create_test_state_with_size(rows, cols);
     state
 }
 

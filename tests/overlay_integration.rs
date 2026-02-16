@@ -18,7 +18,7 @@ use wsh::api::router;
 
 #[tokio::test]
 async fn test_overlay_crud_flow() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Step 1: Create overlay with styled span (yellow, bold)
@@ -165,7 +165,7 @@ async fn test_overlay_crud_flow() {
 
 #[tokio::test]
 async fn test_overlay_list_and_clear() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create two overlays
@@ -270,7 +270,7 @@ async fn test_overlay_list_and_clear() {
 
 #[tokio::test]
 async fn test_overlay_patch_position() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create overlay
@@ -348,7 +348,7 @@ async fn test_overlay_patch_position() {
 
 #[tokio::test]
 async fn test_overlay_not_found() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Try to get non-existent overlay
@@ -402,7 +402,7 @@ async fn test_overlay_not_found() {
 
 #[tokio::test]
 async fn test_overlay_create_with_background() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create overlay with an opaque background
@@ -463,7 +463,7 @@ async fn test_overlay_create_with_background() {
 
 #[tokio::test]
 async fn test_overlay_named_span_update() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create overlay with named spans
@@ -553,7 +553,7 @@ async fn test_overlay_named_span_update() {
 
 #[tokio::test]
 async fn test_overlay_region_write() {
-    let (state, _, _) = common::create_test_state();
+    let (state, _, _, _ptx) = common::create_test_state();
     let app = router(state, None);
 
     // Create overlay with enough height for region writes

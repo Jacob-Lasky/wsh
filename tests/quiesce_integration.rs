@@ -23,10 +23,11 @@ use wsh::{
     shutdown::ShutdownCoordinator,
 };
 
-fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker) {
+fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker, mpsc::Sender<Bytes>) {
     let (input_tx, input_rx) = mpsc::channel(64);
     let broker = Broker::new();
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (parser_tx, parser_rx) = mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let activity = ActivityTracker::new();
     let session = Session {
         name: "test".to_string(),
@@ -60,7 +61,7 @@ fn create_test_state() -> (api::AppState, mpsc::Receiver<Bytes>, ActivityTracker
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
-    (state, input_rx, activity)
+    (state, input_rx, activity, parser_tx)
 }
 
 async fn start_server(app: axum::Router) -> SocketAddr {
@@ -107,7 +108,7 @@ async fn http_get(addr: SocketAddr, uri: &str) -> (u16, serde_json::Value) {
 
 #[tokio::test]
 async fn test_http_quiesce_returns_screen_state_after_quiet() {
-    let (state, _rx, _activity) = create_test_state();
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -129,7 +130,7 @@ async fn test_http_quiesce_returns_screen_state_after_quiet() {
 
 #[tokio::test]
 async fn test_http_quiesce_returns_408_when_deadline_exceeded() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -153,7 +154,7 @@ async fn test_http_quiesce_returns_408_when_deadline_exceeded() {
 
 #[tokio::test]
 async fn test_http_quiesce_returns_immediately_when_already_quiescent() {
-    let (state, _rx, _activity) = create_test_state();
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -179,7 +180,7 @@ async fn test_http_quiesce_returns_immediately_when_already_quiescent() {
 
 #[tokio::test]
 async fn test_http_quiesce_waits_for_activity_to_stop() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -212,7 +213,7 @@ async fn test_http_quiesce_waits_for_activity_to_stop() {
 
 #[tokio::test]
 async fn test_http_input_resets_quiescence_timer() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -262,7 +263,7 @@ async fn test_http_input_resets_quiescence_timer() {
 
 #[tokio::test]
 async fn test_ws_await_quiesce_returns_sync_result() {
-    let (state, _rx, _activity) = create_test_state();
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -304,7 +305,7 @@ async fn test_ws_await_quiesce_returns_sync_result() {
 
 #[tokio::test]
 async fn test_ws_await_quiesce_timeout_error() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -353,7 +354,7 @@ async fn test_ws_await_quiesce_timeout_error() {
 
 #[tokio::test]
 async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -428,7 +429,7 @@ async fn test_ws_quiesce_ms_emits_sync_after_quiet() {
 
 #[tokio::test]
 async fn test_http_quiesce_returns_generation() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -448,7 +449,7 @@ async fn test_http_quiesce_returns_generation() {
 
 #[tokio::test]
 async fn test_http_quiesce_last_generation_prevents_storm() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -490,7 +491,7 @@ async fn test_http_quiesce_last_generation_prevents_storm() {
 
 #[tokio::test]
 async fn test_http_quiesce_last_generation_stale_returns_normally() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -517,7 +518,7 @@ async fn test_http_quiesce_last_generation_stale_returns_normally() {
 
 #[tokio::test]
 async fn test_http_quiesce_last_generation_timeout() {
-    let (state, _rx, _activity) = create_test_state();
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -539,7 +540,7 @@ async fn test_http_quiesce_last_generation_timeout() {
 
 #[tokio::test]
 async fn test_http_quiesce_fresh_always_waits() {
-    let (state, _rx, _activity) = create_test_state();
+    let (state, _rx, _activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -566,7 +567,7 @@ async fn test_http_quiesce_fresh_always_waits() {
 
 #[tokio::test]
 async fn test_http_quiesce_fresh_resets_on_activity() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -602,7 +603,7 @@ async fn test_http_quiesce_fresh_resets_on_activity() {
 
 #[tokio::test]
 async fn test_ws_await_quiesce_returns_generation() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -637,7 +638,7 @@ async fn test_ws_await_quiesce_returns_generation() {
 
 #[tokio::test]
 async fn test_ws_await_quiesce_last_generation_blocks() {
-    let (state, _rx, activity) = create_test_state();
+    let (state, _rx, activity, _parser_tx) = create_test_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -690,13 +691,14 @@ async fn test_ws_await_quiesce_last_generation_blocks() {
 
 /// Creates a test state with two sessions ("alpha" and "beta") and returns
 /// their respective activity trackers.
-fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTracker) {
+fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTracker, mpsc::Sender<Bytes>, mpsc::Sender<Bytes>) {
     let registry = SessionRegistry::new();
 
-    let make_session = |name: &str| -> (Session, ActivityTracker) {
+    let make_session = |name: &str| -> (Session, ActivityTracker, mpsc::Sender<Bytes>) {
         let (input_tx, _input_rx) = mpsc::channel(64);
         let broker = Broker::new();
-        let parser = Parser::spawn(&broker, 80, 24, 1000);
+        let (parser_tx, parser_rx) = mpsc::channel(256);
+        let parser = Parser::spawn(parser_rx, 80, 24, 1000);
         let activity = ActivityTracker::new();
         let session = Session {
             name: name.to_string(),
@@ -723,11 +725,11 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(wsh::overlay::ScreenMode::Normal)),
             cancelled: tokio_util::sync::CancellationToken::new(),
         };
-        (session, activity)
+        (session, activity, parser_tx)
     };
 
-    let (session_a, activity_a) = make_session("alpha");
-    let (session_b, activity_b) = make_session("beta");
+    let (session_a, activity_a, parser_tx_a) = make_session("alpha");
+    let (session_b, activity_b, parser_tx_b) = make_session("beta");
     registry.insert(Some("alpha".into()), session_a).unwrap();
     registry.insert(Some("beta".into()), session_b).unwrap();
 
@@ -736,12 +738,12 @@ fn create_multi_session_state() -> (api::AppState, ActivityTracker, ActivityTrac
         shutdown: ShutdownCoordinator::new(),
         server_config: std::sync::Arc::new(api::ServerConfig::new(false)),
     };
-    (state, activity_a, activity_b)
+    (state, activity_a, activity_b, parser_tx_a, parser_tx_b)
 }
 
 #[tokio::test]
 async fn test_http_quiesce_any_returns_first_quiescent_session() {
-    let (state, _activity_a, _activity_b) = create_multi_session_state();
+    let (state, _activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -762,7 +764,7 @@ async fn test_http_quiesce_any_returns_first_quiescent_session() {
 
 #[tokio::test]
 async fn test_http_quiesce_any_returns_408_when_all_busy() {
-    let (state, activity_a, activity_b) = create_multi_session_state();
+    let (state, activity_a, activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -786,7 +788,7 @@ async fn test_http_quiesce_any_returns_408_when_all_busy() {
 
 #[tokio::test]
 async fn test_http_quiesce_any_picks_quiet_session_while_other_busy() {
-    let (state, activity_a, _activity_b) = create_multi_session_state();
+    let (state, activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -811,7 +813,7 @@ async fn test_http_quiesce_any_picks_quiet_session_while_other_busy() {
 
 #[tokio::test]
 async fn test_http_quiesce_any_last_generation_skips_stale_session() {
-    let (state, activity_a, activity_b) = create_multi_session_state();
+    let (state, activity_a, activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 
@@ -855,7 +857,7 @@ async fn test_http_quiesce_any_last_generation_skips_stale_session() {
 
 #[tokio::test]
 async fn test_http_quiesce_any_fresh_always_waits() {
-    let (state, _activity_a, _activity_b) = create_multi_session_state();
+    let (state, _activity_a, _activity_b, _ptx_a, _ptx_b) = create_multi_session_state();
     let app = api::router(state, None);
     let addr = start_server(app).await;
 

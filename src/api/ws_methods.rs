@@ -1143,10 +1143,11 @@ mod tests {
     use bytes::Bytes;
     use tokio::sync::mpsc;
 
-    fn create_test_session() -> (Session, mpsc::Receiver<Bytes>) {
+    fn create_test_session() -> (Session, mpsc::Receiver<Bytes>, mpsc::Sender<Bytes>) {
         let (input_tx, input_rx) = mpsc::channel(64);
         let broker = Broker::new();
-        let parser = Parser::spawn(&broker, 80, 24, 1000);
+        let (parser_tx, parser_rx) = mpsc::channel(256);
+        let parser = Parser::spawn(parser_rx, 80, 24, 1000);
         let session = Session {
             name: "test".to_string(),
             pid: None,
@@ -1169,12 +1170,12 @@ mod tests {
             screen_mode: std::sync::Arc::new(parking_lot::RwLock::new(crate::overlay::ScreenMode::Normal)),
             cancelled: tokio_util::sync::CancellationToken::new(),
         };
-        (session, input_rx)
+        (session, input_rx, parser_tx)
     }
 
     #[tokio::test]
     async fn dispatch_unknown_method() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "do_magic".to_string(),
@@ -1188,7 +1189,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_input_mode() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: Some(serde_json::Value::Number(1.into())),
             method: "get_input_mode".to_string(),
@@ -1203,7 +1204,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_capture_and_release() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Capture
         let req = WsRequest {
@@ -1246,7 +1247,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_list_overlays_empty() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "list_overlays".to_string(),
@@ -1259,7 +1260,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_clear_overlays() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         assert_eq!(session.overlays.list().len(), 1);
 
@@ -1275,7 +1276,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_screen() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: Some(serde_json::Value::Number(1.into())),
             method: "get_screen".to_string(),
@@ -1290,7 +1291,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_screen_no_params() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_screen".to_string(),
@@ -1303,7 +1304,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_scrollback() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_scrollback".to_string(),
@@ -1317,7 +1318,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_send_input_utf8() {
-        let (session, mut rx) = create_test_session();
+        let (session, mut rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "send_input".to_string(),
@@ -1333,7 +1334,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_send_input_base64() {
-        let (session, mut rx) = create_test_session();
+        let (session, mut rx, _parser_tx) = create_test_session();
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x03");
         let req = WsRequest {
@@ -1351,7 +1352,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_send_input_bad_base64() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "send_input".to_string(),
@@ -1364,7 +1365,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_create_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "create_overlay".to_string(),
@@ -1381,7 +1382,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let id = session.overlays.create(5, 10, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Test".to_string(),
             id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
@@ -1399,7 +1400,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_overlay_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_overlay".to_string(),
@@ -1412,7 +1413,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let id = session.overlays.create(0, 0, None, 80, 1, None, vec![crate::overlay::OverlaySpan {
             text: "Old".to_string(),
             id: None, fg: None, bg: None, bold: false, italic: false, underline: false,
@@ -1431,7 +1432,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_patch_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
@@ -1448,7 +1449,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_delete_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let id = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
@@ -1463,7 +1464,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_delete_overlay_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "delete_overlay".to_string(),
@@ -1480,7 +1481,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_list_panels_empty() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "list_panels".to_string(),
@@ -1493,7 +1494,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_create_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: Some(json!(1)),
             method: "create_panel".to_string(),
@@ -1512,7 +1513,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
@@ -1539,7 +1540,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_panel_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_panel".to_string(),
@@ -1552,7 +1553,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
@@ -1585,7 +1586,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_panel_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "update_panel".to_string(),
@@ -1604,7 +1605,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_patch_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let panel_id = session.panels.create(
             crate::panel::Position::Top,
             1,
@@ -1632,7 +1633,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_patch_panel_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "patch_panel".to_string(),
@@ -1645,7 +1646,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_delete_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let panel_id = session.panels.create(
             crate::panel::Position::Bottom,
             2,
@@ -1669,7 +1670,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_delete_panel_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "delete_panel".to_string(),
@@ -1682,7 +1683,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_clear_panels() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         session.panels.create(crate::panel::Position::Top, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         session.panels.create(crate::panel::Position::Bottom, 1, None, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         assert_eq!(session.panels.list().len(), 2);
@@ -1700,7 +1701,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_list_panels_after_create() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         session.panels.create(
             crate::panel::Position::Top,
             1,
@@ -1731,7 +1732,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_overlay_spans() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![
             crate::overlay::OverlaySpan {
                 text: "Old".to_string(),
@@ -1756,7 +1757,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_overlay_spans_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "update_overlay_spans".to_string(),
@@ -1769,7 +1770,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_overlay_region_write() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: Some(json!(2)),
@@ -1789,7 +1790,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_overlay_region_write_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "overlay_region_write".to_string(),
@@ -1802,7 +1803,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_panel_spans() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let pid = session.panels.create(
             crate::panel::Position::Top,
             1,
@@ -1833,7 +1834,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_update_panel_spans_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "update_panel_spans".to_string(),
@@ -1846,7 +1847,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_panel_region_write() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let pid = session.panels.create(
             crate::panel::Position::Bottom,
             3,
@@ -1876,7 +1877,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_panel_region_write_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "panel_region_write".to_string(),
@@ -1889,7 +1890,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_update_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 5, None, vec![
             crate::overlay::OverlaySpan {
                 text: "Title".to_string(),
@@ -1918,7 +1919,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_update_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let pid = session.panels.create(
             crate::panel::Position::Top,
             3,
@@ -1953,7 +1954,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_update_overlay_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "batch_update".to_string(),
@@ -1970,7 +1971,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_update_panel_not_found() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "batch_update".to_string(),
@@ -1987,7 +1988,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_update_spans_only() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![
             crate::overlay::OverlaySpan {
                 text: "A".to_string(),
@@ -2014,7 +2015,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_batch_update_writes_only() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
@@ -2039,7 +2040,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_focus_default_none() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "get_focus".to_string(),
@@ -2052,7 +2053,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_focus_focusable_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
@@ -2067,7 +2068,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_focus_non_focusable_overlay() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
         let req = WsRequest {
             id: None,
@@ -2081,7 +2082,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_focus_nonexistent_target() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: None,
             method: "focus".to_string(),
@@ -2094,7 +2095,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_focus_focusable_panel() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let pid = session.panels.create(
             crate::panel::Position::Bottom,
             1,
@@ -2117,7 +2118,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_unfocus() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal).unwrap();
         session.focus.focus(oid.clone());
         assert_eq!(session.focus.focused(), Some(oid));
@@ -2135,7 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_focus_after_focus() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let oid = session.overlays.create(0, 0, None, 80, 1, None, vec![], true, crate::overlay::ScreenMode::Normal).unwrap();
         session.focus.focus(oid.clone());
 
@@ -2155,7 +2156,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_get_screen_mode_default_normal() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: Some(json!(1)),
             method: "get_screen_mode".to_string(),
@@ -2168,7 +2169,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_enter_alt_screen() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         let req = WsRequest {
             id: Some(json!(2)),
             method: "enter_alt_screen".to_string(),
@@ -2182,7 +2183,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_enter_alt_screen_already_alt() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
 
         let req = WsRequest {
@@ -2197,7 +2198,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_exit_alt_screen() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
 
         let req = WsRequest {
@@ -2213,7 +2214,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_exit_alt_screen_already_normal() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         let req = WsRequest {
             id: Some(json!(5)),
@@ -2227,7 +2228,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_screen_mode_round_trip() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Default is normal
         let req = WsRequest {
@@ -2280,7 +2281,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_overlays_created_in_alt_mode_invisible_in_normal() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Create overlay in normal mode
         session.overlays.create(0, 0, None, 80, 1, None, vec![], false, crate::overlay::ScreenMode::Normal).unwrap();
@@ -2314,7 +2315,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_panels_created_in_alt_mode_invisible_in_normal() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Create panel in normal mode
         session.panels.create(
@@ -2364,7 +2365,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_create_overlay_tags_with_current_mode() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Enter alt mode
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
@@ -2389,7 +2390,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_create_panel_tags_with_current_mode() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Enter alt mode
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;
@@ -2415,7 +2416,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_exit_alt_screen_deletes_alt_elements() {
-        let (session, _rx) = create_test_session();
+        let (session, _rx, _parser_tx) = create_test_session();
 
         // Enter alt mode
         *session.screen_mode.write() = crate::overlay::ScreenMode::Alt;

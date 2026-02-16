@@ -34,6 +34,14 @@ use super::{get_session, AppState};
 /// (blocking ping/pong, quiescence, shutdown, and client messages).
 const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Timeout for parser query calls from HTTP handlers. Prevents a stalled
+/// parser from hanging an agent's HTTP request indefinitely.
+const PARSER_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Maximum allowed value for timeout_ms and max_wait_ms parameters.
+/// Prevents clients from holding connections open indefinitely.
+const MAX_WAIT_CEILING_MS: u64 = 300_000; // 5 minutes
+
 /// Pending await_quiesce state: (request_id, format, future resolving to generation or None on timeout)
 type PendingQuiesce = (
     Option<serde_json::Value>,
@@ -565,13 +573,13 @@ async fn handle_ws_json(
                             let params_value = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
                             match serde_json::from_value::<super::ws_methods::AwaitQuiesceParams>(params_value) {
                                 Ok(params) => {
-                                    let timeout = std::time::Duration::from_millis(params.timeout_ms);
+                                    let timeout = std::time::Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
                                     let format = params.format;
                                     let activity = session.activity.clone();
                                     let last_generation = params.last_generation;
                                     let fresh = params.fresh;
 
-                                    let deadline = std::time::Duration::from_millis(params.max_wait_ms);
+                                    let deadline = std::time::Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
                                     let fut: std::pin::Pin<Box<dyn std::future::Future<Output = Option<u64>> + Send>> =
                                         Box::pin(async move {
                                             let inner = if fresh {
@@ -1008,8 +1016,8 @@ async fn handle_server_ws_request(
                 },
             };
 
-            let rows = params.rows.unwrap_or(24);
-            let cols = params.cols.unwrap_or(80);
+            let rows = params.rows.unwrap_or(24).max(1);
+            let cols = params.cols.unwrap_or(80).max(1);
 
             // Pre-check name availability to avoid spawning a PTY that would be
             // immediately discarded on name conflict.
@@ -1333,21 +1341,35 @@ async fn handle_server_ws_request(
                 }
 
                 // Spawn a task that reads from the parser event stream and
-                // forwards into the shared mpsc channel.
+                // forwards into the shared mpsc channel. The session's
+                // cancellation token ensures this exits promptly when the
+                // session is killed, rather than waiting for all Parser
+                // clones to drop.
                 let mut events = Box::pin(session.parser.subscribe());
                 let tx = sub_tx.clone();
                 let name = session_name.clone();
+                let cancelled = session.cancelled.clone();
                 let task = tokio::spawn(async move {
-                    while let Some(event) = events.next().await {
-                        if tx
-                            .send(TaggedSessionEvent {
-                                session: name.clone(),
-                                event,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            break;
+                    loop {
+                        tokio::select! {
+                            event = events.next() => {
+                                match event {
+                                    Some(e) => {
+                                        if tx
+                                            .send(TaggedSessionEvent {
+                                                session: name.clone(),
+                                                event: e,
+                                            })
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    None => break,
+                                }
+                            }
+                            _ = cancelled.cancelled() => break,
                         }
                     }
                 });
@@ -1421,8 +1443,8 @@ pub(super) async fn quiesce(
     axum::extract::Query(params): axum::extract::Query<QuiesceQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let timeout = std::time::Duration::from_millis(params.timeout_ms);
-    let deadline = std::time::Duration::from_millis(params.max_wait_ms);
+    let timeout = std::time::Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
+    let deadline = std::time::Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
     let activity = &session.activity;
     let quiesce_fut = if params.fresh {
@@ -1436,11 +1458,13 @@ pub(super) async fn quiesce(
     match tokio::time::timeout(deadline, quiesce_fut).await {
         Ok(generation) => {
             // Quiescent — query screen state
-            let response = session
-                .parser
-                .query(Query::Screen { format: params.format })
-                .await
-                .map_err(|_| ApiError::ParserUnavailable)?;
+            let response = tokio::time::timeout(
+                PARSER_QUERY_TIMEOUT,
+                session.parser.query(Query::Screen { format: params.format }),
+            )
+            .await
+            .map_err(|_| ApiError::ParserTimeout)?
+            .map_err(|_| ApiError::ParserUnavailable)?;
 
             match response {
                 crate::parser::state::QueryResponse::Screen(screen) => {
@@ -1492,8 +1516,8 @@ pub(super) async fn quiesce_any(
         return Err(ApiError::NoSessions);
     }
 
-    let timeout = std::time::Duration::from_millis(params.timeout_ms);
-    let deadline = std::time::Duration::from_millis(params.max_wait_ms);
+    let timeout = std::time::Duration::from_millis(params.timeout_ms.min(MAX_WAIT_CEILING_MS));
+    let deadline = std::time::Duration::from_millis(params.max_wait_ms.min(MAX_WAIT_CEILING_MS));
 
     // Build a quiescence future for each session, racing them all.
     let mut futs = Vec::with_capacity(names.len());
@@ -1533,11 +1557,13 @@ pub(super) async fn quiesce_any(
     match tokio::time::timeout(deadline, race).await {
         Ok((session_name, generation)) => {
             let session = get_session(&state.sessions, &session_name)?;
-            let response = session
-                .parser
-                .query(Query::Screen { format: params.format })
-                .await
-                .map_err(|_| ApiError::ParserUnavailable)?;
+            let response = tokio::time::timeout(
+                PARSER_QUERY_TIMEOUT,
+                session.parser.query(Query::Screen { format: params.format }),
+            )
+            .await
+            .map_err(|_| ApiError::ParserTimeout)?
+            .map_err(|_| ApiError::ParserUnavailable)?;
 
             match response {
                 crate::parser::state::QueryResponse::Screen(screen) => {
@@ -1568,11 +1594,13 @@ pub(super) async fn screen(
     axum::extract::Query(params): axum::extract::Query<ScreenQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
-    let response = session
-        .parser
-        .query(Query::Screen { format: params.format })
-        .await
-        .map_err(|_| ApiError::ParserUnavailable)?;
+    let response = tokio::time::timeout(
+        PARSER_QUERY_TIMEOUT,
+        session.parser.query(Query::Screen { format: params.format }),
+    )
+    .await
+    .map_err(|_| ApiError::ParserTimeout)?
+    .map_err(|_| ApiError::ParserUnavailable)?;
 
     Ok(Json(response))
 }
@@ -1598,15 +1626,17 @@ pub(super) async fn scrollback(
 ) -> Result<impl IntoResponse, ApiError> {
     let session = get_session(&state.sessions, &name)?;
     let limit = params.limit.min(10_000);
-    let response = session
-        .parser
-        .query(Query::Scrollback {
+    let response = tokio::time::timeout(
+        PARSER_QUERY_TIMEOUT,
+        session.parser.query(Query::Scrollback {
             format: params.format,
             offset: params.offset,
             limit,
-        })
-        .await
-        .map_err(|_| ApiError::ParserUnavailable)?;
+        }),
+    )
+    .await
+    .map_err(|_| ApiError::ParserTimeout)?
+    .map_err(|_| ApiError::ParserUnavailable)?;
 
     Ok(Json(response))
 }
@@ -2158,8 +2188,8 @@ pub(super) async fn session_create(
         },
     };
 
-    let rows = req.rows.unwrap_or(24);
-    let cols = req.cols.unwrap_or(80);
+    let rows = req.rows.unwrap_or(24).max(1);
+    let cols = req.cols.unwrap_or(80).max(1);
 
     // Pre-check name availability to avoid spawning a PTY that would be
     // immediately discarded on name conflict. This is a TOCTOU hint (the

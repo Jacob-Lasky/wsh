@@ -67,7 +67,8 @@ async fn test_websocket_input_reaches_pty_and_output_returns() {
         }
     });
 
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -209,7 +210,8 @@ async fn test_websocket_text_input_reaches_pty() {
         }
     });
 
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx2, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,

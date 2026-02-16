@@ -73,7 +73,8 @@ async fn test_http_post_input_reaches_pty_and_produces_output() {
     });
 
     // === Setup HTTP Server ===
-    let parser = Parser::spawn(&broker, 80, 24, 1000);
+    let (_parser_tx, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 24, 1000);
     let session = Session {
         name: "test".to_string(),
         pid: None,
@@ -229,7 +230,8 @@ async fn test_scrollback_endpoint_with_real_pty() {
     });
 
     // === Setup HTTP Server ===
-    let parser = Parser::spawn(&broker, 80, 5, 1000); // 80 cols, 5 rows
+    let (_parser_tx2, parser_rx) = tokio::sync::mpsc::channel(256);
+    let parser = Parser::spawn(parser_rx, 80, 5, 1000); // 80 cols, 5 rows
     let session = Session {
         name: "test".to_string(),
         pid: None,

@@ -139,11 +139,16 @@ impl Session {
         self.kill_child();
     }
 
-    /// Send SIGHUP to the child process if we have a PID.
+    /// Send SIGHUP to the child's process group.
     ///
     /// Used during drain to explicitly request graceful termination,
     /// rather than relying on PTY fd closure (which depends on all
     /// Session Arc clones being dropped).
+    ///
+    /// Signals the entire process group (negative PID) so that child
+    /// processes spawned by the shell also receive the signal.
+    /// portable_pty calls setsid() when spawning, so the child is the
+    /// leader of its own process group.
     pub fn send_sighup(&self) {
         if let Some(pid) = self.pid {
             if pid > i32::MAX as u32 {
@@ -152,15 +157,17 @@ impl Session {
             }
             #[cfg(unix)]
             unsafe {
-                libc::kill(pid as i32, libc::SIGHUP);
+                // Negative PID signals the entire process group
+                libc::kill(-(pid as i32), libc::SIGHUP);
             }
         }
     }
 
-    /// Send SIGKILL to the child process if we have a PID.
+    /// Send SIGKILL to the child's process group.
     ///
     /// Used as an escalation path when the child ignores SIGHUP during
-    /// shutdown/drain.
+    /// shutdown/drain. Signals the entire process group so sub-processes
+    /// are also killed.
     pub fn kill_child(&self) {
         if let Some(pid) = self.pid {
             if pid > i32::MAX as u32 {
@@ -169,7 +176,8 @@ impl Session {
             }
             #[cfg(unix)]
             unsafe {
-                libc::kill(pid as i32, libc::SIGKILL);
+                // Negative PID signals the entire process group
+                libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
     }
@@ -256,7 +264,63 @@ impl Session {
         }
 
         let broker = crate::broker::Broker::new();
-        let parser = Parser::spawn(&broker, cols as usize, rows as usize, 10_000);
+
+        // ── Design decision: bounded parser channel with PTY backpressure ──
+        //
+        // The parser channel uses a bounded mpsc with `blocking_send()` in the
+        // PTY reader thread. This is the final, opinionated design after three
+        // iterations. DO NOT CHANGE without reading the full rationale below.
+        //
+        // ## History
+        //
+        // - **v1** (0fa88ad): Parser shared the broadcast channel (capacity 64).
+        //   Slow parser → RecvError::Lagged → permanent VT state corruption.
+        //
+        // - **v2** (2e2a1a0): Dedicated bounded(4096) mpsc + try_send(). Drops
+        //   data silently when full — same corruption bug, just harder to hit.
+        //
+        // - **v3**: Dedicated unbounded mpsc. No data loss, but `cat /dev/zero`
+        //   grows the channel without bound → OOM.
+        //
+        // - **v4** (current): Dedicated bounded mpsc + blocking_send(). The PTY
+        //   reader thread blocks when the parser can't keep up. This propagates
+        //   backpressure through the kernel PTY buffer to the child process —
+        //   exactly how real terminal emulators work. No data loss, no OOM.
+        //
+        // ## Why backpressure is correct
+        //
+        // The parser is the source of truth for terminal state. Every byte the
+        // PTY emits MUST reach it. The only two options that preserve this
+        // invariant are unbounded (v3, OOM risk) and backpressure (v4, no risk).
+        //
+        // Backpressure is also the natural model: a real terminal emulator
+        // processes bytes at a finite rate, and the kernel PTY buffer provides
+        // natural flow control. We're just making the parser part of that flow.
+        //
+        // ## Why this doesn't freeze the terminal or streaming clients
+        //
+        // The PTY reader does broadcast FIRST (non-blocking, lossy), THEN the
+        // blocking parser send. So:
+        //   - Local terminal passthrough: unaffected (handled before this code)
+        //   - Streaming WebSocket/socket clients: unaffected (broadcast is lossy)
+        //   - The only thing that slows down is the child process's write rate
+        //
+        // ## Capacity
+        //
+        // 256 slots × ~4KB typical chunk ≈ 1MB max buffered. This absorbs
+        // brief parser stalls (e.g. query processing) without backpressure,
+        // while capping memory for sustained floods.
+        //
+        // ## Do not change this to try_send or unbounded
+        //
+        // - try_send: silently drops data → permanent VT state corruption
+        // - unbounded: `cat /dev/zero` → OOM
+        // Both have been tried and reverted. This is the correct design.
+        // ────────────────────────────────────────────────────────────────────
+        const PARSER_CHANNEL_CAPACITY: usize = 256;
+        let (parser_tx, parser_rx) = mpsc::channel::<Bytes>(PARSER_CHANNEL_CAPACITY);
+        let parser = Parser::spawn(parser_rx, cols as usize, rows as usize, 10_000);
+
         let (input_tx, input_rx) = mpsc::channel::<Bytes>(64);
         let shutdown = ShutdownCoordinator::new();
         let overlays = OverlayStore::new();
@@ -267,7 +331,12 @@ impl Session {
         let focus = FocusTracker::new();
         let terminal_size = TerminalSize::new(rows, cols);
 
-        // Spawn PTY reader (server mode -- no stdout, only broker)
+        // Spawn PTY reader (server mode -- no stdout, only broker + parser)
+        //
+        // Order matters: broadcast first (non-blocking, lossy for streaming
+        // clients), then blocking_send to parser (applies backpressure).
+        // This ensures streaming clients and the local terminal are never
+        // blocked by parser throughput.
         let broker_clone = broker.clone();
         let activity_clone = activity.clone();
         tokio::task::spawn_blocking(move || {
@@ -280,7 +349,13 @@ impl Session {
                         Ok(0) => break,
                         Ok(n) => {
                             let data = Bytes::copy_from_slice(&buf[..n]);
-                            broker_clone.publish(data);
+                            // 1. Broadcast to streaming clients (non-blocking, lossy)
+                            broker_clone.publish(data.clone());
+                            // 2. Send to parser (blocks if channel full → PTY backpressure)
+                            if parser_tx.blocking_send(data).is_err() {
+                                // Parser channel closed — session is shutting down
+                                break;
+                            }
                             activity_clone.touch();
                         }
                         Err(_) => break,
@@ -365,35 +440,49 @@ impl Session {
         // Watch for alternate screen mode changes from the parser and
         // update session.screen_mode accordingly. This ensures overlays
         // and panels are automatically filtered by screen mode.
+        //
+        // The cancelled token ensures this task exits promptly when the
+        // session is killed, rather than waiting for all Parser clones
+        // to be dropped (which keeps the broadcast channel open).
         {
             let screen_mode = session.screen_mode.clone();
             let visual_update_tx = session.visual_update_tx.clone();
             let parser = session.parser.clone();
+            let cancelled = session.cancelled.clone();
             tokio::spawn(async move {
                 use tokio_stream::StreamExt;
                 let mut events = std::pin::pin!(parser.subscribe());
-                while let Some(sub_event) = events.next().await {
-                    if let crate::parser::SubscriptionEvent::Event(
-                        crate::parser::events::Event::Mode { alternate_active, .. }
-                    ) = sub_event {
-                        let new_mode = if alternate_active {
-                            ScreenMode::Alt
-                        } else {
-                            ScreenMode::Normal
-                        };
-                        let changed = {
-                            let mut mode = screen_mode.write();
-                            if *mode != new_mode {
-                                *mode = new_mode;
-                                true
-                            } else {
-                                false
+                loop {
+                    tokio::select! {
+                        sub_event = events.next() => {
+                            match sub_event {
+                                Some(crate::parser::SubscriptionEvent::Event(
+                                    crate::parser::events::Event::Mode { alternate_active, .. }
+                                )) => {
+                                    let new_mode = if alternate_active {
+                                        ScreenMode::Alt
+                                    } else {
+                                        ScreenMode::Normal
+                                    };
+                                    let changed = {
+                                        let mut mode = screen_mode.write();
+                                        if *mode != new_mode {
+                                            *mode = new_mode;
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    };
+                                    if changed {
+                                        let _ = visual_update_tx.send(VisualUpdate::OverlaysChanged);
+                                        let _ = visual_update_tx.send(VisualUpdate::PanelsChanged);
+                                    }
+                                }
+                                Some(_) => {} // other events, ignore
+                                None => break, // channel closed
                             }
-                        };
-                        if changed {
-                            let _ = visual_update_tx.send(VisualUpdate::OverlaysChanged);
-                            let _ = visual_update_tx.send(VisualUpdate::PanelsChanged);
                         }
+                        _ = cancelled.cancelled() => break,
                     }
                 }
             });
@@ -771,7 +860,8 @@ mod tests {
     fn create_test_session(name: &str) -> (Session, mpsc::Receiver<Bytes>) {
         let (input_tx, input_rx) = mpsc::channel(64);
         let broker = Broker::new();
-        let parser = Parser::spawn(&broker, 80, 24, 1000);
+        let (_parser_tx, parser_rx) = mpsc::channel(256);
+        let parser = Parser::spawn(parser_rx, 80, 24, 1000);
         let pty = crate::pty::Pty::spawn(24, 80, crate::pty::SpawnCommand::default())
             .expect("failed to spawn PTY for test");
 
