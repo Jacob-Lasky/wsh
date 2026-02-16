@@ -194,7 +194,7 @@ impl WshMcpServer {
         // Monitor child exit so the session is auto-removed when the process dies.
         self.state
             .sessions
-            .monitor_child_exit(assigned_name.clone(), child_exit_rx);
+            .monitor_child_exit(assigned_name.clone(), session.client_count.clone(), child_exit_rx);
 
         let result = serde_json::json!({
             "name": assigned_name,

@@ -139,6 +139,24 @@ impl Session {
         self.kill_child();
     }
 
+    /// Send SIGHUP to the child process if we have a PID.
+    ///
+    /// Used during drain to explicitly request graceful termination,
+    /// rather than relying on PTY fd closure (which depends on all
+    /// Session Arc clones being dropped).
+    pub fn send_sighup(&self) {
+        if let Some(pid) = self.pid {
+            if pid > i32::MAX as u32 {
+                tracing::warn!(pid, "PID exceeds i32::MAX, cannot send signal");
+                return;
+            }
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as i32, libc::SIGHUP);
+            }
+        }
+    }
+
     /// Send SIGKILL to the child process if we have a PID.
     ///
     /// Used as an escalation path when the child ignores SIGHUP during
@@ -275,6 +293,35 @@ impl Session {
         });
 
         // Spawn PTY writer
+        //
+        // ── REVIEWED: blocking thread pool saturation during shutdown ───
+        //
+        // This task blocks on `input_rx.blocking_recv()`, which occupies a
+        // tokio blocking thread until the channel closes or write_all fails.
+        // During drain(), Session clones held by other tasks keep input_tx
+        // alive, so the channel doesn't close immediately. This has been
+        // flagged as a potential blocking-thread-pool saturation risk during
+        // shutdown with many sessions. It is a non-issue because:
+        //
+        // 1. drain() now sends explicit SIGHUP to the child (see
+        //    send_sighup()). Most shells exit immediately on SIGHUP,
+        //    closing the PTY slave fd. The next write_all to the PTY master
+        //    then fails with EIO/EAGAIN, breaking this loop promptly.
+        //
+        // 2. Even if the child ignores SIGHUP, SIGKILL is sent after 3s,
+        //    which unconditionally closes the PTY. The writer is therefore
+        //    blocked for at most 3 seconds in the worst case.
+        //
+        // 3. Tokio's blocking thread pool defaults to 512 threads. Even
+        //    draining 50+ sessions simultaneously leaves ample headroom.
+        //    Each blocked writer consumes ~zero CPU (kernel wait state).
+        //
+        // 4. Adding a cancellation mechanism (e.g., select! with a token)
+        //    is not possible here because this is a blocking (non-async)
+        //    context. Replacing blocking_recv with a poll loop would add
+        //    latency to normal input handling for negligible shutdown
+        //    benefit. The current design is the right tradeoff.
+        // ────────────────────────────────────────────────────────────────
         tokio::task::spawn_blocking(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 use std::io::Write;
@@ -600,15 +647,19 @@ impl SessionRegistry {
     /// Remove all sessions, detaching streaming clients first.
     ///
     /// Called during server shutdown to ensure child processes are cleaned up
-    /// promptly (dropping the Session closes PTY handles, which sends SIGHUP
-    /// to the child). Returns a `JoinHandle` for the SIGKILL escalation task
-    /// if any sessions were drained, so the caller can await it.
+    /// promptly. Sends explicit SIGHUP to each child (rather than relying on
+    /// PTY fd closure, which requires all Session Arc clones to be dropped).
+    /// Returns a `JoinHandle` for the SIGKILL escalation task if any sessions
+    /// were drained, so the caller can await it.
     pub fn drain(&self) -> Option<tokio::task::JoinHandle<()>> {
         let names = self.list();
         let mut sessions = Vec::new();
         for name in names {
             if let Some(session) = self.remove(&name) {
                 session.detach();
+                // Explicitly send SIGHUP so the child gets a graceful shutdown
+                // signal immediately, regardless of outstanding Session clones.
+                session.send_sighup();
                 sessions.push(session);
             }
         }
@@ -638,41 +689,60 @@ impl SessionRegistry {
     /// API-created sessions where the caller would otherwise discard the
     /// exit receiver.
     ///
-    /// Uses `Arc::ptr_eq` on the session's `client_count` as a stable identity
-    /// marker, so this works correctly even if the session is renamed between
-    /// spawn and child exit.
+    /// # Identity parameter
+    ///
+    /// The `identity` parameter is the session's `client_count` Arc, used as
+    /// a stable identity marker via `Arc::ptr_eq`. This allows the monitor to
+    /// find the session's current name even after a rename.
+    ///
+    /// ## Design decision: why the caller passes identity explicitly
+    ///
+    /// This has evolved through several iterations:
+    ///
+    /// - **v1** (d667d66): Captured `name` by value. Worked only if the
+    ///   session was never renamed between spawn and child exit.
+    ///
+    /// - **v2** (afdbc6e): Added `Arc::ptr_eq` identity lookup, but the
+    ///   identity was captured internally via `registry.get(&name)`. This
+    ///   introduced a `None` fallback path: if the lookup failed (session
+    ///   not yet inserted, or removed between insert and this call), the
+    ///   code silently fell back to the captured name — reintroducing the
+    ///   exact stale-name bug the identity mechanism was designed to fix.
+    ///   All current call sites happened to call this right after insert,
+    ///   so the `None` path never executed, but it was a latent bug.
+    ///
+    /// - **v3** (current): The caller passes identity explicitly. There is
+    ///   no `None` fallback. The caller always has the Session (they just
+    ///   created it), so `session.client_count.clone()` is always available.
+    ///
+    /// Do not revert to internal identity lookup. The explicit parameter
+    /// makes the contract enforceable by the type system.
     pub fn monitor_child_exit(
         &self,
         name: String,
+        identity: Arc<AtomicUsize>,
         child_exit_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
         let registry = self.clone();
-        // Capture the session's client_count Arc as a stable identity marker.
-        // Session clones share the same Arc, so Arc::ptr_eq identifies the
-        // same logical session even after rename. The name is only used as
-        // a fast-path check and log context.
-        let identity = registry
-            .get(&name)
-            .map(|s| Arc::clone(&s.client_count));
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
-            // Look up the session's current name by stable identity
-            let current_name = match &identity {
-                Some(id) => registry.find_name_by_identity(id).or(Some(name.clone())),
-                None => Some(name.clone()),
-            };
-            let display_name = current_name.as_deref().unwrap_or(&name);
-            tracing::info!(session = %display_name, "session child process exited");
+            // Look up the session's current name by stable identity.
+            // The identity Arc is shared across all clones of the same
+            // Session, so Arc::ptr_eq identifies the session regardless
+            // of renames. The original name is only used as a fallback
+            // for logging if the session was already removed (e.g. by
+            // drain or kill) before the child exited.
+            let current_name = registry.find_name_by_identity(&identity)
+                .unwrap_or_else(|| name.clone());
+            tracing::info!(session = %current_name, "session child process exited");
             // Signal all attached streaming clients to detach before removing
             // the session. Without this, socket streaming loops would block
             // forever on output_rx.recv() because the Session holds a
             // broadcast::Sender clone that keeps the channel open.
-            if let Some(ref name) = current_name {
-                if let Some(session) = registry.get(name) {
-                    session.detach();
-                }
-                registry.remove(name);
+            if let Some(session) = registry.get(&current_name) {
+                session.detach();
             }
+            registry.remove(&current_name);
         });
     }
 

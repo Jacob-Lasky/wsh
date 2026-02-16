@@ -1052,7 +1052,7 @@ async fn handle_server_ws_request(
             match state.sessions.insert_and_get(params.name, session.clone()) {
                 Ok((assigned_name, _session)) => {
                     // Monitor child exit so the session is auto-removed.
-                    state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
+                    state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), child_exit_rx);
                     return Some(super::ws_methods::WsResponse::success(
                         id,
                         method,
@@ -2189,7 +2189,7 @@ pub(super) async fn session_create(
     };
 
     // Monitor child exit so the session is auto-removed when the process dies.
-    state.sessions.monitor_child_exit(assigned_name.clone(), child_exit_rx);
+    state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), child_exit_rx);
 
     Ok((
         StatusCode::CREATED,

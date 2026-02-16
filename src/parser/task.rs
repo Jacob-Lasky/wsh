@@ -8,8 +8,8 @@ use super::state::{
 };
 
 pub async fn run(
-    mut raw_rx: mpsc::Receiver<Bytes>,
-    mut query_rx: mpsc::Receiver<(Query, oneshot::Sender<QueryResponse>)>,
+    raw_rx: &mut mpsc::Receiver<Bytes>,
+    query_rx: &mut mpsc::Receiver<(Query, oneshot::Sender<QueryResponse>)>,
     event_tx: broadcast::Sender<Event>,
     cols: usize,
     rows: usize,

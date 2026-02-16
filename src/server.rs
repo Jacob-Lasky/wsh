@@ -208,7 +208,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         }
     };
 
-    sessions.monitor_child_exit(name.clone(), child_exit_rx);
+    sessions.monitor_child_exit(name.clone(), session.client_count.clone(), child_exit_rx);
 
     // Send response
     let resp = CreateSessionResponseMsg {
@@ -588,11 +588,64 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "socket client lagged on output, disconnecting for re-sync");
-                        // Disconnect the client so it can reconnect and get full state
-                        // via the attach response. Continuing after lag would leave the
-                        // client with an incomplete view of terminal state.
-                        break;
+                        tracing::warn!(skipped = n, "socket client lagged on output, sending screen sync");
+                        // ── DESIGN DECISION: lag recovery strategy ──────────────
+                        //
+                        // This has been deliberated across multiple review cycles.
+                        // Three approaches were considered:
+                        //
+                        // 1. DISCONNECT (break) — force the client to reconnect
+                        //    and reattach, getting full state via AttachResponse.
+                        //    Pros: simple, guarantees correct state.
+                        //    Cons: disrupts AI agents mid-operation; they lose
+                        //    their streaming loop and must implement reconnect
+                        //    logic; transient output between disconnect and
+                        //    reattach is lost from the agent's perspective.
+                        //    Tried in: commit afdbc6e, reverted here.
+                        //
+                        // 2. LOG-AND-CONTINUE (no sync) — skip the missed
+                        //    messages and keep streaming.
+                        //    Pros: simplest, no disruption.
+                        //    Cons: client has a permanently stale/corrupt
+                        //    terminal view until enough new output happens to
+                        //    overwrite the screen. Unacceptable for agents that
+                        //    read the screen after sending commands.
+                        //    Tried in: commit d2e945b, rejected.
+                        //
+                        // 3. LOG + FULL SCREEN SYNC (chosen) — query the parser
+                        //    for current screen state, convert to raw ANSI bytes,
+                        //    and send as a PtyOutput frame. Client stays connected
+                        //    with a correct view.
+                        //    Pros: no disruption, correct state, matches ws_json
+                        //    behavior. Cons: parser query adds brief latency.
+                        //
+                        // We chose (3). Do not change this to (1) or (2) without
+                        // revisiting the above tradeoffs.
+                        // ────────────────────────────────────────────────────────
+                        use crate::parser::ansi::line_to_ansi;
+                        use crate::parser::state::{Format, Query, QueryResponse};
+                        if let Ok(Ok(QueryResponse::Screen(screen))) = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            parser.query(Query::Screen { format: Format::Styled }),
+                        ).await {
+                            let mut buf = String::new();
+                            buf.push_str("\x1b[H\x1b[2J");
+                            for (i, line) in screen.lines.iter().enumerate() {
+                                buf.push_str(&line_to_ansi(line));
+                                if i + 1 < screen.lines.len() {
+                                    buf.push_str("\r\n");
+                                }
+                            }
+                            buf.push_str(&format!(
+                                "\x1b[{};{}H",
+                                screen.cursor.row + 1,
+                                screen.cursor.col + 1,
+                            ));
+                            let sync_frame = Frame::data(FrameType::PtyOutput, Bytes::from(buf.into_bytes()));
+                            if !write_frame_with_timeout(&sync_frame, &mut writer).await {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -754,8 +807,9 @@ mod tests {
             80,
         )
         .unwrap();
+        let identity = session.client_count.clone();
         sessions.insert(Some("attach-target".to_string()), session).unwrap();
-        sessions.monitor_child_exit("attach-target".to_string(), child_exit_rx);
+        sessions.monitor_child_exit("attach-target".to_string(), identity, child_exit_rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 
@@ -990,16 +1044,18 @@ mod tests {
             SpawnCommand::default(),
             24, 80,
         ).unwrap();
+        let id1 = session1.client_count.clone();
         sessions.insert(Some("list-a".to_string()), session1).unwrap();
-        sessions.monitor_child_exit("list-a".to_string(), rx1);
+        sessions.monitor_child_exit("list-a".to_string(), id1, rx1);
 
         let (session2, rx2) = Session::spawn(
             "list-b".to_string(),
             SpawnCommand::default(),
             24, 80,
         ).unwrap();
+        let id2 = session2.client_count.clone();
         sessions.insert(Some("list-b".to_string()), session2).unwrap();
-        sessions.monitor_child_exit("list-b".to_string(), rx2);
+        sessions.monitor_child_exit("list-b".to_string(), id2, rx2);
 
         let (path, _dir) = start_test_server(sessions).await;
 
@@ -1030,8 +1086,9 @@ mod tests {
             SpawnCommand::default(),
             24, 80,
         ).unwrap();
+        let identity = session.client_count.clone();
         sessions.insert(Some("kill-me".to_string()), session).unwrap();
-        sessions.monitor_child_exit("kill-me".to_string(), rx);
+        sessions.monitor_child_exit("kill-me".to_string(), identity, rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 

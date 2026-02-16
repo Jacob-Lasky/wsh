@@ -596,16 +596,25 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     }
                 }
             };
-            match session.input_tx.send(bytes).await {
-                Ok(()) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                session.input_tx.send(bytes),
+            ).await {
+                Ok(Ok(())) => {
                     session.activity.touch();
                     WsResponse::success(id, method, serde_json::json!({}))
                 }
-                Err(_) => WsResponse::error(
+                Ok(Err(_)) => WsResponse::error(
                     id,
                     method,
                     "input_send_failed",
                     "Failed to send input to terminal.",
+                ),
+                Err(_) => WsResponse::error(
+                    id,
+                    method,
+                    "input_send_timeout",
+                    "Input send timed out.",
                 ),
             }
         }

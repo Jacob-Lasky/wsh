@@ -59,23 +59,40 @@ impl Parser {
         let (query_tx, query_rx) = mpsc::channel(32);
         let (event_tx, _) = broadcast::channel(256);
 
-        let (raw_tx, raw_rx) = raw_broker.subscribe_parser();
+        let (raw_tx, mut raw_rx) = raw_broker.subscribe_parser();
         let event_tx_clone = event_tx.clone();
 
         tokio::spawn(async move {
-            let result = AssertUnwindSafe(task::run(
-                raw_rx,
-                query_rx,
-                event_tx_clone,
-                cols,
-                rows,
-                scrollback_limit,
-            ))
-            .catch_unwind()
-            .await;
-            match result {
-                Ok(()) => tracing::warn!("parser task exited unexpectedly"),
-                Err(e) => tracing::error!("parser task panicked: {:?}", e),
+            let mut query_rx = query_rx;
+            loop {
+                let result = AssertUnwindSafe(task::run(
+                    &mut raw_rx,
+                    &mut query_rx,
+                    event_tx_clone.clone(),
+                    cols,
+                    rows,
+                    scrollback_limit,
+                ))
+                .catch_unwind()
+                .await;
+                match result {
+                    Ok(()) => {
+                        // Normal exit: channels closed, session is shutting down.
+                        tracing::debug!("parser task exited normally");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("parser task panicked, restarting with fresh state: {:?}", e);
+                        // Emit a reset event so clients know to re-query state.
+                        // The VT state is lost, but the channels survive across
+                        // the panic boundary because they're owned by this outer
+                        // scope, not by the panicking task::run function.
+                        let _ = event_tx_clone.send(events::Event::Reset {
+                            seq: 0,
+                            reason: events::ResetReason::ParserRestart,
+                        });
+                    }
+                }
             }
         });
 

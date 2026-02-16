@@ -570,10 +570,11 @@ mod tests {
             80,
         )
         .unwrap();
+        let identity = session.client_count.clone();
         sessions
             .insert(Some("attach-me".to_string()), session)
             .unwrap();
-        sessions.monitor_child_exit("attach-me".to_string(), child_exit_rx);
+        sessions.monitor_child_exit("attach-me".to_string(), identity, child_exit_rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 
@@ -639,8 +640,9 @@ mod tests {
             crate::pty::SpawnCommand::default(),
             24, 80,
         ).unwrap();
+        let identity = s.client_count.clone();
         sessions.insert(Some("ls-test".to_string()), s).unwrap();
-        sessions.monitor_child_exit("ls-test".to_string(), rx);
+        sessions.monitor_child_exit("ls-test".to_string(), identity, rx);
 
         let (path, _dir) = start_test_server(sessions).await;
 
@@ -661,8 +663,9 @@ mod tests {
             crate::pty::SpawnCommand::default(),
             24, 80,
         ).unwrap();
+        let identity = s.client_count.clone();
         sessions.insert(Some("kill-test".to_string()), s).unwrap();
-        sessions.monitor_child_exit("kill-test".to_string(), rx);
+        sessions.monitor_child_exit("kill-test".to_string(), identity, rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 
@@ -839,8 +842,9 @@ mod tests {
             crate::pty::SpawnCommand::default(),
             24, 80,
         ).unwrap();
+        let identity = s.client_count.clone();
         sessions.insert(Some("detach-test".to_string()), s).unwrap();
-        sessions.monitor_child_exit("detach-test".to_string(), rx);
+        sessions.monitor_child_exit("detach-test".to_string(), identity, rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 

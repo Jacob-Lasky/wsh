@@ -46,6 +46,9 @@ pub enum ResetReason {
     AlternateScreenEnter,
     AlternateScreenExit,
     Resize,
+    /// The parser task panicked and was restarted with fresh VT state.
+    /// Clients should re-query screen/scrollback as all prior state is lost.
+    ParserRestart,
 }
 
 #[derive(Debug, Clone, Deserialize)]
