@@ -149,6 +149,8 @@ impl WshMcpServer {
         let rows = params.rows.unwrap_or(24).max(1);
         let cols = params.cols.unwrap_or(80).max(1);
 
+        // Advisory pre-check — see name_available() doc for TOCTOU rationale.
+        // The authoritative check is insert_and_get() below.
         self.state.sessions.name_available(&param_name).map_err(|e| match e {
             RegistryError::NameExists(n) => ErrorData::invalid_params(
                 format!("session name already exists: {n}"),

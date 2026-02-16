@@ -151,8 +151,8 @@ impl Session {
     /// leader of its own process group.
     pub fn send_sighup(&self) {
         if let Some(pid) = self.pid {
-            if pid > i32::MAX as u32 {
-                tracing::warn!(pid, "PID exceeds i32::MAX, cannot send signal");
+            if pid == 0 || pid > i32::MAX as u32 {
+                tracing::warn!(pid, "PID is 0 or exceeds i32::MAX, cannot send signal");
                 return;
             }
             #[cfg(unix)]
@@ -170,8 +170,8 @@ impl Session {
     /// are also killed.
     pub fn kill_child(&self) {
         if let Some(pid) = self.pid {
-            if pid > i32::MAX as u32 {
-                tracing::warn!(pid, "PID exceeds i32::MAX, cannot send signal");
+            if pid == 0 || pid > i32::MAX as u32 {
+                tracing::warn!(pid, "PID is 0 or exceeds i32::MAX, cannot send signal");
                 return;
             }
             #[cfg(unix)]
@@ -727,10 +727,36 @@ impl SessionRegistry {
         self.len() == 0
     }
 
-    /// Check if a given name is available (not already in use).
+    /// **Advisory** check for whether a session name is available.
     ///
-    /// Returns `Ok(())` if the name is `None` (auto-assign) or the name is free.
+    /// Returns `Ok(())` if `name` is `None` (auto-assign) or the name is free.
     /// Returns `Err(RegistryError::NameExists)` if the name is taken.
+    ///
+    /// # Important: this is a fast-fail optimization, NOT a correctness guard
+    ///
+    /// Session creation follows a two-phase pattern:
+    ///
+    ///   1. `name_available()` — advisory pre-check (this method)
+    ///   2. `spawn_blocking(Session::spawn_with_options(...))` — expensive fork/exec
+    ///   3. `insert_and_get()` / `insert()` — **authoritative** atomic insert
+    ///
+    /// There is a TOCTOU window between step 1 and step 3: a concurrent request
+    /// can claim the same name after the pre-check passes. This is by design.
+    /// The pre-check exists solely to avoid the expensive fork/exec in step 2
+    /// when the name is *obviously* already taken. The authoritative uniqueness
+    /// check is `insert_and_get()` / `insert()`, which operates under a write
+    /// lock. If the name was claimed between steps 1 and 3, the insert fails
+    /// and the caller shuts down the just-spawned session (`session.shutdown()`).
+    ///
+    /// The consequence of losing the TOCTOU race is one wasted fork/exec that
+    /// is immediately cleaned up — not a resource leak, not a correctness bug.
+    /// This only happens under concurrent creates with the *same* name, which
+    /// is a degenerate case.
+    ///
+    /// **Do not attempt to "fix" this TOCTOU by holding a lock across the
+    /// spawn.** That would block all session operations for the duration of
+    /// fork/exec (potentially hundreds of ms under memory pressure), which is
+    /// far worse than the occasional wasted spawn.
     pub fn name_available(&self, name: &Option<String>) -> Result<(), RegistryError> {
         if let Some(n) = name {
             let inner = self.inner.read();

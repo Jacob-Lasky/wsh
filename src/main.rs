@@ -546,6 +546,23 @@ async fn run_mcp(
     // response tasks can write without interleaving.
     let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
 
+    // ── Design decision: concurrent request dispatch ─────────────
+    //
+    // MCP hosts (e.g., Claude Desktop) may pipeline multiple requests
+    // before the first one completes. A sequential bridge would block
+    // fast queries (list_sessions, get_screen) behind slow tools
+    // (run_command with a 30s wait). We spawn each request into its
+    // own task and write responses to stdout as they arrive. JSON-RPC
+    // response correlation is handled by the `id` field, so ordering
+    // does not matter.
+    //
+    // Tasks are tracked in a JoinSet so we can drain in-flight requests
+    // on EOF, and bounded by a semaphore to prevent unbounded memory
+    // growth under sustained pipelining with a slow/unresponsive server.
+    // ─────────────────────────────────────────────────────────────
+    let mut in_flight = tokio::task::JoinSet::new();
+    let concurrency = Arc::new(tokio::sync::Semaphore::new(64));
+
     let mut line = String::new();
     loop {
         line.clear();
@@ -562,26 +579,36 @@ async fn run_mcp(
             continue;
         }
 
-        // ── Design decision: concurrent request dispatch ─────────────
-        //
-        // MCP hosts (e.g., Claude Desktop) may pipeline multiple requests
-        // before the first one completes. A sequential bridge would block
-        // fast queries (list_sessions, get_screen) behind slow tools
-        // (run_command with a 30s wait). We spawn each request into its
-        // own task and write responses to stdout as they arrive. JSON-RPC
-        // response correlation is handled by the `id` field, so ordering
-        // does not matter.
-        // ─────────────────────────────────────────────────────────────
         let body_str = trimmed.to_string();
         let client = http_client.clone();
         let url = mcp_url.clone();
         let sid = session_id.clone();
         let tok = token.clone();
         let out = stdout.clone();
+        let sem = concurrency.clone();
 
-        tokio::spawn(async move {
+        in_flight.spawn(async move {
+            // Acquire permit before dispatching; dropped when the task completes.
+            let _permit = sem.acquire().await;
             mcp_bridge_dispatch(body_str, client, url, sid, tok, out).await;
         });
+    }
+
+    // ── Drain in-flight requests ─────────────────────────────────────
+    //
+    // Wait for dispatched tasks to finish so their responses reach the
+    // MCP host before we tear down stdout. Bounded by a timeout to
+    // avoid hanging indefinitely if the server is unresponsive.
+    // ─────────────────────────────────────────────────────────────────
+    if !in_flight.is_empty() {
+        tracing::debug!(
+            count = in_flight.len(),
+            "draining in-flight MCP bridge tasks"
+        );
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while in_flight.join_next().await.is_some() {}
+        })
+        .await;
     }
 
     // ── Cleanup: terminate server-side MCP session ───────────────────

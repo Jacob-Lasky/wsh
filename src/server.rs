@@ -186,6 +186,8 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         None => SpawnCommand::default(),
     };
 
+    // Advisory pre-check — see name_available() doc for TOCTOU rationale.
+    // The authoritative check is insert() below.
     sessions.name_available(&msg.name).map_err(|e| {
         io::Error::new(io::ErrorKind::AlreadyExists, e.to_string())
     })?;

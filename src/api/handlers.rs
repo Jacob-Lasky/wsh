@@ -38,6 +38,12 @@ const WS_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// parser from hanging an agent's HTTP request indefinitely.
 const PARSER_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Maximum WebSocket message size (1 MB). Matches the HTTP DefaultBodyLimit to
+/// prevent a single WS text frame from allocating unbounded memory during
+/// deserialization. The default tungstenite limit is 64 MB which is far too
+/// generous for terminal I/O payloads.
+const MAX_WS_MESSAGE_SIZE: usize = 1024 * 1024;
+
 /// Maximum allowed value for timeout_ms and max_wait_ms parameters.
 /// Prevents clients from holding connections open indefinitely.
 const MAX_WAIT_CEILING_MS: u64 = 300_000; // 5 minutes
@@ -87,7 +93,8 @@ pub(super) async fn ws_raw(
     let client_guard = session.connect().ok_or_else(|| {
         ApiError::ResourceLimitReached("too many clients connected to session".into())
     })?;
-    Ok(ws.on_upgrade(|socket| handle_ws_raw(socket, session, state.shutdown, client_guard)))
+    Ok(ws.max_message_size(MAX_WS_MESSAGE_SIZE)
+        .on_upgrade(|socket| handle_ws_raw(socket, session, state.shutdown, client_guard)))
 }
 
 async fn handle_ws_raw(
@@ -238,7 +245,8 @@ pub(super) async fn ws_json(
     let client_guard = session.connect().ok_or_else(|| {
         ApiError::ResourceLimitReached("too many clients connected to session".into())
     })?;
-    Ok(ws.on_upgrade(|socket| handle_ws_json(socket, session, state.shutdown, client_guard)))
+    Ok(ws.max_message_size(MAX_WS_MESSAGE_SIZE)
+        .on_upgrade(|socket| handle_ws_json(socket, session, state.shutdown, client_guard)))
 }
 
 async fn handle_ws_json(
@@ -678,6 +686,18 @@ async fn handle_ws_json(
 // Server-level multiplexed WebSocket
 // ---------------------------------------------------------------------------
 
+/// RAII guard that decrements the server-level WebSocket connection counter on
+/// drop. Unlike the manual `fetch_sub` pattern, this ensures the counter is
+/// correctly decremented even if the `on_upgrade` future is dropped without
+/// executing (e.g. client disconnects before the upgrade completes).
+struct ServerWsGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ServerWsGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub(super) async fn ws_json_server(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -690,11 +710,12 @@ pub(super) async fn ws_json_server(
             "too many server-level WebSocket connections".into(),
         ));
     }
-    let ws_count = state.server_ws_count.clone();
-    Ok(ws.on_upgrade(|socket| async move {
-        handle_ws_json_server(socket, state).await;
-        ws_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }))
+    let guard = ServerWsGuard(state.server_ws_count.clone());
+    Ok(ws.max_message_size(MAX_WS_MESSAGE_SIZE)
+        .on_upgrade(|socket| async move {
+            handle_ws_json_server(socket, state).await;
+            drop(guard); // explicitly drop after handler completes
+        }))
 }
 
 /// A tagged session event forwarded through the internal mpsc channel.
@@ -1044,8 +1065,8 @@ async fn handle_server_ws_request(
             let rows = params.rows.unwrap_or(24).max(1);
             let cols = params.cols.unwrap_or(80).max(1);
 
-            // Pre-check name availability to avoid spawning a PTY that would be
-            // immediately discarded on name conflict.
+            // Advisory pre-check — see name_available() doc for TOCTOU rationale.
+            // The authoritative check is insert_and_get() below.
             if let Err(e) = state.sessions.name_available(&params.name) {
                 return Some(match e {
                     RegistryError::NameExists(n) => super::ws_methods::WsResponse::error(
@@ -2230,10 +2251,8 @@ pub(super) async fn session_create(
     let rows = req.rows.unwrap_or(24).max(1);
     let cols = req.cols.unwrap_or(80).max(1);
 
-    // Pre-check name availability to avoid spawning a PTY that would be
-    // immediately discarded on name conflict. This is a TOCTOU hint (the
-    // name could be taken between the check and the insert), but insert()
-    // will catch that and we only waste a PTY in the rare race case.
+    // Advisory pre-check — see name_available() doc for TOCTOU rationale.
+    // The authoritative check is insert_and_get() below.
     state.sessions.name_available(&req_name).map_err(|e| match e {
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
