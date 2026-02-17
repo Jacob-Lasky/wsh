@@ -214,6 +214,7 @@ async fn handle_ws_raw(
                     }
                     Some(Ok(Message::Pong(_))) => {
                         last_pong = tokio::time::Instant::now();
+                        ping_sent = false;
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(_)) => continue,
@@ -521,6 +522,7 @@ async fn handle_ws_json(
                 match msg {
                     Some(Ok(Message::Pong(_))) => {
                         last_pong = tokio::time::Instant::now();
+                        ping_sent = false;
                     }
                     Some(Ok(Message::Text(text))) => {
                         // Parse as WsRequest
@@ -972,6 +974,7 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                     }
                     Some(Ok(Message::Pong(_))) => {
                         last_pong = tokio::time::Instant::now();
+                        ping_sent = false;
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     _ => continue,
