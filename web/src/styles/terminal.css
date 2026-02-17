@@ -568,6 +568,31 @@ html, body, #app {
   font-family: system-ui, sans-serif;
 }
 
+.error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 1rem;
+  color: #888;
+  font-family: system-ui, sans-serif;
+}
+
+.error-boundary button {
+  padding: 0.4rem 1rem;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.error-boundary button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* ==========================================================================
    Animations
    ========================================================================== */

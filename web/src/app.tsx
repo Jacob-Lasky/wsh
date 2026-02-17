@@ -21,6 +21,7 @@ import { SessionCarousel } from "./components/SessionCarousel";
 import { SessionGrid } from "./components/SessionGrid";
 import { TiledLayout } from "./components/TiledLayout";
 import { StatusBar } from "./components/StatusBar";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 // Track unsubscribe functions for per-session subscriptions
 const unsubscribes = new Map<string, () => void>();
@@ -83,9 +84,11 @@ export function App() {
 
   return (
     <>
-      {mode === "focused" && <SessionCarousel client={client} />}
-      {mode === "overview" && <SessionGrid client={client} />}
-      {mode === "tiled" && <TiledLayout client={client} />}
+      <ErrorBoundary>
+        {mode === "focused" && <SessionCarousel client={client} />}
+        {mode === "overview" && <SessionGrid client={client} />}
+        {mode === "tiled" && <TiledLayout client={client} />}
+      </ErrorBoundary>
       <StatusBar client={client} />
     </>
   );

@@ -345,7 +345,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_ne!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         // Web UI is served under /ui (SPA fallback)
         let response = app

@@ -578,7 +578,7 @@ async fn test_nonexistent_route_returns_404() {
         .await
         .unwrap();
 
-    assert_ne!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
