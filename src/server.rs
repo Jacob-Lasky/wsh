@@ -213,7 +213,7 @@ async fn handle_create_session<S: AsyncRead + AsyncWrite + Unpin>(
         }
     };
 
-    sessions.monitor_child_exit(name.clone(), session.client_count.clone(), child_exit_rx);
+    sessions.monitor_child_exit(name.clone(), session.client_count.clone(), session.child_exited.clone(), child_exit_rx);
 
     // Send response
     let resp = CreateSessionResponseMsg {
@@ -279,12 +279,15 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
                 ScrollbackRequest::Lines(n) => n,
                 _ => usize::MAX,
             };
-            match session.parser.query(Query::Scrollback {
-                format: Format::Styled,
-                offset: 0,
-                limit,
-            }).await {
-                Ok(QueryResponse::Scrollback(sb)) => {
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                session.parser.query(Query::Scrollback {
+                    format: Format::Styled,
+                    offset: 0,
+                    limit,
+                }),
+            ).await {
+                Ok(Ok(QueryResponse::Scrollback(sb))) => {
                     let mut buf = String::new();
                     for line in &sb.lines {
                         buf.push_str(&line_to_ansi(line));
@@ -297,10 +300,13 @@ async fn handle_attach_session<S: AsyncRead + AsyncWrite + Unpin>(
         }
     };
 
-    let screen_data = match session.parser.query(Query::Screen {
-        format: Format::Styled,
-    }).await {
-        Ok(QueryResponse::Screen(screen)) => {
+    let screen_data = match tokio::time::timeout(
+        Duration::from_secs(10),
+        session.parser.query(Query::Screen {
+            format: Format::Styled,
+        }),
+    ).await {
+        Ok(Ok(QueryResponse::Screen(screen))) => {
             let mut buf = String::new();
             // Clear screen and home cursor before replaying
             buf.push_str("\x1b[H\x1b[2J");
@@ -817,8 +823,9 @@ mod tests {
         )
         .unwrap();
         let identity = session.client_count.clone();
+        let child_exited = session.child_exited.clone();
         sessions.insert(Some("attach-target".to_string()), session).unwrap();
-        sessions.monitor_child_exit("attach-target".to_string(), identity, child_exit_rx);
+        sessions.monitor_child_exit("attach-target".to_string(), identity, child_exited, child_exit_rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 
@@ -1054,8 +1061,9 @@ mod tests {
             24, 80,
         ).unwrap();
         let id1 = session1.client_count.clone();
+        let child_exited1 = session1.child_exited.clone();
         sessions.insert(Some("list-a".to_string()), session1).unwrap();
-        sessions.monitor_child_exit("list-a".to_string(), id1, rx1);
+        sessions.monitor_child_exit("list-a".to_string(), id1, child_exited1, rx1);
 
         let (session2, rx2) = Session::spawn(
             "list-b".to_string(),
@@ -1063,8 +1071,9 @@ mod tests {
             24, 80,
         ).unwrap();
         let id2 = session2.client_count.clone();
+        let child_exited2 = session2.child_exited.clone();
         sessions.insert(Some("list-b".to_string()), session2).unwrap();
-        sessions.monitor_child_exit("list-b".to_string(), id2, rx2);
+        sessions.monitor_child_exit("list-b".to_string(), id2, child_exited2, rx2);
 
         let (path, _dir) = start_test_server(sessions).await;
 
@@ -1096,8 +1105,9 @@ mod tests {
             24, 80,
         ).unwrap();
         let identity = session.client_count.clone();
+        let child_exited = session.child_exited.clone();
         sessions.insert(Some("kill-me".to_string()), session).unwrap();
-        sessions.monitor_child_exit("kill-me".to_string(), identity, rx);
+        sessions.monitor_child_exit("kill-me".to_string(), identity, child_exited, rx);
 
         let (path, _dir) = start_test_server(sessions.clone()).await;
 

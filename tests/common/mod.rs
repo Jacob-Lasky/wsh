@@ -39,6 +39,7 @@ pub fn create_test_session_with_size(name: &str, rows: u16, cols: u16) -> TestSe
         pid: None,
         command: "test".to_string(),
         client_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        child_exited: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         input_tx,
         output_rx: broker.sender(),
         shutdown: ShutdownCoordinator::new(),

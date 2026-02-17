@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use bytes::Bytes;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -7,6 +10,7 @@ use super::state::{
     Cursor, CursorResponse, Format, Query, QueryResponse, ScreenResponse, ScrollbackResponse,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     raw_rx: &mut mpsc::Receiver<Bytes>,
     query_rx: &mut mpsc::Receiver<(Query, oneshot::Sender<QueryResponse>)>,
@@ -14,6 +18,8 @@ pub async fn run(
     cols: usize,
     rows: usize,
     scrollback_limit: usize,
+    shared_cols: &Arc<AtomicUsize>,
+    shared_rows: &Arc<AtomicUsize>,
 ) {
     let mut vt = avt::Vt::builder()
         .size(cols, rows)
@@ -102,13 +108,14 @@ pub async fn run(
             }
 
             Some((query, response_tx)) = query_rx.recv() => {
-                let response = handle_query(&mut vt, query, epoch, alternate_active, &mut seq, &event_tx);
+                let response = handle_query(&mut vt, query, epoch, alternate_active, &mut seq, &event_tx, shared_cols, shared_rows);
                 let _ = response_tx.send(response);
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_query(
     vt: &mut avt::Vt,
     query: Query,
@@ -116,6 +123,8 @@ fn handle_query(
     alternate_active: bool,
     seq: &mut u64,
     event_tx: &broadcast::Sender<Event>,
+    shared_cols: &Arc<AtomicUsize>,
+    shared_rows: &Arc<AtomicUsize>,
 ) -> QueryResponse {
     match query {
         Query::Screen { format } => {
@@ -184,6 +193,10 @@ fn handle_query(
 
         Query::Resize { cols, rows } => {
             let _changes = vt.resize(cols, rows);
+            // Update shared dimensions so the restart loop uses current
+            // values instead of stale spawn-time dimensions.
+            shared_cols.store(cols, Ordering::Release);
+            shared_rows.store(rows, Ordering::Release);
             *seq = seq.wrapping_add(1);
             let _ = event_tx.send(Event::Reset {
                 seq: *seq,

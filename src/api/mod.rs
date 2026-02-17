@@ -34,11 +34,11 @@ impl ServerConfig {
     }
 
     pub fn is_persistent(&self) -> bool {
-        self.persistent.load(Ordering::Relaxed)
+        self.persistent.load(Ordering::Acquire)
     }
 
     pub fn set_persistent(&self, value: bool) {
-        self.persistent.store(value, Ordering::Relaxed);
+        self.persistent.store(value, Ordering::Release);
     }
 }
 
@@ -192,6 +192,7 @@ mod tests {
             pid: None,
             command: "test".to_string(),
             client_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            child_exited: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),

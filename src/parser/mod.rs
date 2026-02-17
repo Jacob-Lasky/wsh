@@ -6,6 +6,8 @@ pub mod state;
 mod task;
 
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use futures::FutureExt;
 use thiserror::Error;
@@ -62,16 +64,39 @@ impl Parser {
 
         let event_tx_clone = event_tx.clone();
 
+        // Shared dimension tracking for panic recovery. When the parser
+        // handles a Resize query it updates these atomics, so the restart
+        // loop can read the current dimensions instead of the stale values
+        // from session creation time.
+        let current_cols = Arc::new(AtomicUsize::new(cols));
+        let current_rows = Arc::new(AtomicUsize::new(rows));
+        let task_cols = current_cols.clone();
+        let task_rows = current_rows.clone();
+
         tokio::spawn(async move {
             let mut query_rx = query_rx;
+            // On first iteration use the initial dimensions; on restart
+            // read the latest values from the shared atomics.
+            let mut first = true;
             loop {
+                let (c, r) = if first {
+                    first = false;
+                    (cols, rows)
+                } else {
+                    (
+                        task_cols.load(Ordering::Acquire),
+                        task_rows.load(Ordering::Acquire),
+                    )
+                };
                 let result = AssertUnwindSafe(task::run(
                     &mut raw_rx,
                     &mut query_rx,
                     event_tx_clone.clone(),
-                    cols,
-                    rows,
+                    c,
+                    r,
                     scrollback_limit,
+                    &task_cols,
+                    &task_rows,
                 ))
                 .catch_unwind()
                 .await;

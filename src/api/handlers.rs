@@ -143,15 +143,42 @@ async fn handle_ws_raw(
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "ws_raw client lagged, closing for re-sync");
-                        let _ = tokio::time::timeout(
-                            std::time::Duration::from_secs(2),
-                            ws_tx.send(Message::Close(Some(CloseFrame {
-                                code: 1013, // Try Again Later
-                                reason: "output lagged, reconnect to re-sync".into(),
-                            }))),
-                        ).await;
-                        break;
+                        tracing::warn!(skipped = n, "ws_raw client lagged, sending screen sync");
+                        // ── Lag recovery: full screen sync ───────────────────
+                        //
+                        // Matches the socket server and ws_json strategies
+                        // (see design decision comment in server.rs). Query
+                        // the parser for current screen state, render as raw
+                        // ANSI bytes, and send as a Binary frame. The client
+                        // stays connected with a correct terminal view.
+                        // ─────────────────────────────────────────────────────
+                        use crate::parser::ansi::line_to_ansi;
+                        use crate::parser::state::{Format, Query, QueryResponse};
+                        if let Ok(Ok(QueryResponse::Screen(screen))) = tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            session.parser.query(Query::Screen { format: Format::Styled }),
+                        ).await {
+                            let mut buf = String::new();
+                            buf.push_str("\x1b[H\x1b[2J");
+                            for (i, line) in screen.lines.iter().enumerate() {
+                                buf.push_str(&line_to_ansi(line));
+                                if i + 1 < screen.lines.len() {
+                                    buf.push_str("\r\n");
+                                }
+                            }
+                            buf.push_str(&format!(
+                                "\x1b[{};{}H",
+                                screen.cursor.row + 1,
+                                screen.cursor.col + 1,
+                            ));
+                            match tokio::time::timeout(
+                                WS_SEND_TIMEOUT,
+                                ws_tx.send(Message::Binary(buf.into_bytes())),
+                            ).await {
+                                Ok(Ok(())) => {}
+                                _ => break,
+                            }
+                        }
                     }
                 }
             }
@@ -403,22 +430,35 @@ async fn handle_ws_json(
                 let (req_id, format, _) = pending_quiesce.take().unwrap();
                 if let Some(generation) = result {
                     // Quiescent — query screen and return (with timeout to avoid blocking the loop)
-                    if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                    match tokio::time::timeout(
                         std::time::Duration::from_secs(10),
                         session.parser.query(crate::parser::state::Query::Screen { format }),
                     ).await {
-                        let scrollback_lines = screen.total_lines;
-                        let resp = super::ws_methods::WsResponse::success(
-                            req_id,
-                            "await_quiesce",
-                            serde_json::json!({
-                                "screen": screen,
-                                "scrollback_lines": scrollback_lines,
-                                "generation": generation,
-                            }),
-                        );
-                        if let Ok(json) = serde_json::to_string(&resp) {
-                            ws_send!(ws_tx, Message::Text(json));
+                        Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) => {
+                            let scrollback_lines = screen.total_lines;
+                            let resp = super::ws_methods::WsResponse::success(
+                                req_id,
+                                "await_quiesce",
+                                serde_json::json!({
+                                    "screen": screen,
+                                    "scrollback_lines": scrollback_lines,
+                                    "generation": generation,
+                                }),
+                            );
+                            if let Ok(json) = serde_json::to_string(&resp) {
+                                ws_send!(ws_tx, Message::Text(json));
+                            }
+                        }
+                        _ => {
+                            let resp = super::ws_methods::WsResponse::error(
+                                req_id,
+                                "await_quiesce",
+                                "parser_error",
+                                "Terminal is quiescent but screen query failed.",
+                            );
+                            if let Ok(json) = serde_json::to_string(&resp) {
+                                ws_send!(ws_tx, Message::Text(json));
+                            }
                         }
                     }
                 } else {
@@ -694,7 +734,7 @@ struct ServerWsGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl Drop for ServerWsGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -702,13 +742,26 @@ pub(super) async fn ws_json_server(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Enforce server-level WS connection limit.
-    let prev = state.server_ws_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    if prev >= super::MAX_SERVER_WS_CONNECTIONS {
-        state.server_ws_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        return Err(ApiError::ResourceLimitReached(
-            "too many server-level WebSocket connections".into(),
-        ));
+    // Enforce server-level WS connection limit with a race-free CAS loop.
+    loop {
+        let current = state.server_ws_count.load(std::sync::atomic::Ordering::Acquire);
+        if current >= super::MAX_SERVER_WS_CONNECTIONS {
+            return Err(ApiError::ResourceLimitReached(
+                "too many server-level WebSocket connections".into(),
+            ));
+        }
+        if state
+            .server_ws_count
+            .compare_exchange(
+                current,
+                current + 1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            break;
+        }
     }
     let guard = ServerWsGuard(state.server_ws_count.clone());
     Ok(ws.max_message_size(MAX_WS_MESSAGE_SIZE)
@@ -729,6 +782,10 @@ struct SubHandle {
     subscribed_types: Vec<EventType>,
     task: tokio::task::JoinHandle<()>,
     _client_guard: Option<crate::session::ClientGuard>,
+    /// Shared name that the forwarding task reads. Updated by
+    /// `format_registry_event` on rename so the task tags events
+    /// with the session's current name.
+    shared_name: std::sync::Arc<parking_lot::Mutex<String>>,
 }
 
 /// Convert a registry-level SessionEvent to a JSON value for the WS protocol.
@@ -746,6 +803,9 @@ fn format_registry_event(
         }
         crate::session::SessionEvent::Renamed { old_name, new_name } => {
             if let Some(handle) = sub_handles.remove(old_name.as_str()) {
+                // Update the shared name so the forwarding task tags
+                // subsequent events with the new name.
+                *handle.shared_name.lock() = new_name.clone();
                 sub_handles.insert(new_name.clone(), handle);
             }
             serde_json::json!({
@@ -975,6 +1035,34 @@ async fn handle_ws_json_server(socket: WebSocket, state: AppState) {
                         if let Ok(json) = serde_json::to_string(&lag_msg) {
                             ws_send!(ws_tx, Message::Text(json));
                         }
+                        // After lag, push a full sync so the client can recover,
+                        // matching the per-session ws_json behavior.
+                        if let Some(session) = state.sessions.get(&tagged.session) {
+                            if let Ok(Ok(crate::parser::state::QueryResponse::Screen(screen))) = tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                session.parser.query(crate::parser::state::Query::Screen {
+                                    format: crate::parser::state::Format::default(),
+                                }),
+                            ).await {
+                                let scrollback_lines = screen.total_lines;
+                                let sync_event = crate::parser::events::Event::Sync {
+                                    seq: 0,
+                                    screen,
+                                    scrollback_lines,
+                                };
+                                if let Ok(event_value) = serde_json::to_value(&sync_event) {
+                                    let tagged_json = if let serde_json::Value::Object(mut map) = event_value {
+                                        map.insert("session".to_string(), serde_json::json!(tagged.session));
+                                        serde_json::Value::Object(map)
+                                    } else {
+                                        event_value
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&tagged_json) {
+                                        ws_send!(ws_tx, Message::Text(json));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1119,7 +1207,7 @@ async fn handle_server_ws_request(
             match state.sessions.insert_and_get(param_name, session.clone()) {
                 Ok((assigned_name, _session)) => {
                     // Monitor child exit so the session is auto-removed.
-                    state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), child_exit_rx);
+                    state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), session.child_exited.clone(), child_exit_rx);
                     return Some(super::ws_methods::WsResponse::success(
                         id,
                         method,
@@ -1304,8 +1392,9 @@ async fn handle_server_ws_request(
 
             match state.sessions.rename(&params.name, &params.new_name) {
                 Ok(_session) => {
-                    // Update subscription key if it exists
+                    // Update subscription key and shared name if it exists
                     if let Some(handle) = sub_handles.remove(&params.name) {
+                        *handle.shared_name.lock() = params.new_name.clone();
                         sub_handles.insert(params.new_name.clone(), handle);
                     }
                     return Some(super::ws_methods::WsResponse::success(
@@ -1404,9 +1493,17 @@ async fn handle_server_ws_request(
                 // cancellation token ensures this exits promptly when the
                 // session is killed, rather than waiting for all Parser
                 // clones to drop.
+                //
+                // The task reads the session's current name from shared_name
+                // (an Arc<Mutex>) rather than capturing a name clone. This
+                // ensures events are tagged with the correct name even if the
+                // session is renamed by another client while the subscription
+                // is active. format_registry_event updates shared_name on
+                // rename events.
                 let mut events = Box::pin(session.parser.subscribe());
                 let tx = sub_tx.clone();
-                let name = session_name.clone();
+                let shared_name = std::sync::Arc::new(parking_lot::Mutex::new(session_name.clone()));
+                let task_name = shared_name.clone();
                 let cancelled = session.cancelled.clone();
                 let task = tokio::spawn(async move {
                     loop {
@@ -1414,9 +1511,10 @@ async fn handle_server_ws_request(
                             event = events.next() => {
                                 match event {
                                     Some(e) => {
+                                        let current_name = task_name.lock().clone();
                                         if tx
                                             .send(TaggedSessionEvent {
-                                                session: name.clone(),
+                                                session: current_name,
                                                 event: e,
                                             })
                                             .await
@@ -1439,6 +1537,7 @@ async fn handle_server_ws_request(
                         subscribed_types: subscribed_types.clone(),
                         task,
                         _client_guard: session.connect(),
+                        shared_name,
                     },
                 );
 
@@ -2287,7 +2386,7 @@ pub(super) async fn session_create(
     };
 
     // Monitor child exit so the session is auto-removed when the process dies.
-    state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), child_exit_rx);
+    state.sessions.monitor_child_exit(assigned_name.clone(), session.client_count.clone(), session.child_exited.clone(), child_exit_rx);
 
     Ok((
         StatusCode::CREATED,

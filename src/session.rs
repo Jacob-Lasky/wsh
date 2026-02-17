@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, mpsc};
 use tokio::sync::broadcast as tokio_broadcast;
@@ -59,6 +59,10 @@ pub struct Session {
     /// WS handlers add this to their `select!` loop to detect session death
     /// immediately rather than operating on ghost state.
     pub cancelled: tokio_util::sync::CancellationToken,
+    /// Set to `true` by `monitor_child_exit` when the child process exits.
+    /// Checked by `send_sighup()` and `kill_child()` to avoid signaling a
+    /// potentially-recycled PID.
+    pub child_exited: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Session {
@@ -84,7 +88,7 @@ pub struct ClientGuard {
 
 impl Drop for ClientGuard {
     fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::Relaxed);
+        self.counter.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -93,21 +97,28 @@ impl Session {
     /// the count when dropped.
     ///
     /// Returns `None` if the session already has [`MAX_CLIENTS_PER_SESSION`]
-    /// connected clients. Uses atomic fetch-add with rollback to avoid races.
+    /// connected clients. Uses a compare-exchange loop for race-free admission.
     pub fn connect(&self) -> Option<ClientGuard> {
-        let prev = self.client_count.fetch_add(1, Ordering::Relaxed);
-        if prev >= MAX_CLIENTS_PER_SESSION {
-            self.client_count.fetch_sub(1, Ordering::Relaxed);
-            return None;
+        loop {
+            let current = self.client_count.load(Ordering::Acquire);
+            if current >= MAX_CLIENTS_PER_SESSION {
+                return None;
+            }
+            if self
+                .client_count
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(ClientGuard {
+                    counter: Arc::clone(&self.client_count),
+                });
+            }
         }
-        Some(ClientGuard {
-            counter: Arc::clone(&self.client_count),
-        })
     }
 
     /// Return the number of currently connected streaming clients.
     pub fn clients(&self) -> usize {
-        self.client_count.load(Ordering::Relaxed)
+        self.client_count.load(Ordering::Acquire)
     }
 
     /// Signal all attached streaming clients to detach.
@@ -155,9 +166,12 @@ impl Session {
                 tracing::warn!(pid, "PID is 0 or exceeds i32::MAX, cannot send signal");
                 return;
             }
+            if self.child_exited.load(Ordering::Acquire) {
+                tracing::debug!(pid, "child already exited, skipping SIGHUP");
+                return;
+            }
             #[cfg(unix)]
             unsafe {
-                // Negative PID signals the entire process group
                 libc::kill(-(pid as i32), libc::SIGHUP);
             }
         }
@@ -168,15 +182,22 @@ impl Session {
     /// Used as an escalation path when the child ignores SIGHUP during
     /// shutdown/drain. Signals the entire process group so sub-processes
     /// are also killed.
+    ///
+    /// Checks `child_exited` before signaling to avoid hitting a
+    /// potentially-recycled PID. The flag is set by `monitor_child_exit`
+    /// when the child process exits.
     pub fn kill_child(&self) {
         if let Some(pid) = self.pid {
             if pid == 0 || pid > i32::MAX as u32 {
                 tracing::warn!(pid, "PID is 0 or exceeds i32::MAX, cannot send signal");
                 return;
             }
+            if self.child_exited.load(Ordering::Acquire) {
+                tracing::debug!(pid, "child already exited, skipping SIGKILL");
+                return;
+            }
             #[cfg(unix)]
             unsafe {
-                // Negative PID signals the entire process group
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
@@ -435,6 +456,7 @@ impl Session {
             visual_update_tx: broadcast::channel::<VisualUpdate>(16).0,
             screen_mode: Arc::new(RwLock::new(ScreenMode::Normal)),
             cancelled: tokio_util::sync::CancellationToken::new(),
+            child_exited: Arc::new(AtomicBool::new(false)),
         };
 
         // Watch for alternate screen mode changes from the parser and
@@ -767,25 +789,33 @@ impl SessionRegistry {
         Ok(())
     }
 
-    /// Remove all sessions, detaching streaming clients first.
+    /// Remove all sessions atomically, detaching streaming clients first.
     ///
     /// Called during server shutdown to ensure child processes are cleaned up
     /// promptly. Sends explicit SIGHUP to each child (rather than relying on
     /// PTY fd closure, which requires all Session Arc clones to be dropped).
     /// Returns a `JoinHandle` for the SIGKILL escalation task if any sessions
     /// were drained, so the caller can await it.
+    ///
+    /// Uses a single write lock for the entire operation to prevent in-flight
+    /// session create requests from inserting new sessions between the
+    /// snapshot and the cleanup. Without atomicity, sessions created by
+    /// requests that were already past the HTTP accept layer (but not yet
+    /// completed) could escape drain and leave orphaned child processes.
     pub fn drain(&self) -> Option<tokio::task::JoinHandle<()>> {
-        let names = self.list();
-        let mut sessions = Vec::new();
-        for name in names {
-            if let Some(session) = self.remove(&name) {
+        let sessions: Vec<Session> = {
+            let mut inner = self.inner.write();
+            let drained: Vec<(String, Session)> = inner.sessions.drain().collect();
+            for (name, ref session) in &drained {
+                session.cancelled.cancel();
                 session.detach();
-                // Explicitly send SIGHUP so the child gets a graceful shutdown
-                // signal immediately, regardless of outstanding Session clones.
                 session.send_sighup();
-                sessions.push(session);
+                let _ = self.events_tx.send(SessionEvent::Destroyed {
+                    name: name.clone(),
+                });
             }
-        }
+            drained.into_iter().map(|(_, s)| s).collect()
+        };
         if sessions.is_empty() {
             return None;
         }
@@ -844,11 +874,16 @@ impl SessionRegistry {
         &self,
         name: String,
         identity: Arc<AtomicUsize>,
+        child_exited: Arc<AtomicBool>,
         child_exit_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
         let registry = self.clone();
         tokio::spawn(async move {
             let _ = child_exit_rx.await;
+            // Mark child as exited BEFORE removing from registry, so that
+            // any concurrent drain/kill_child sees the flag and skips
+            // signaling a potentially-recycled PID.
+            child_exited.store(true, Ordering::Release);
             // ── Design decision: atomic detach + remove ──────────────
             //
             // The identity lookup, detach, and remove MUST happen under
@@ -922,6 +957,7 @@ mod tests {
             pid: None,
             command: "test".to_string(),
             client_count: Arc::new(AtomicUsize::new(0)),
+            child_exited: Arc::new(AtomicBool::new(false)),
             input_tx,
             output_rx: broker.sender(),
             shutdown: ShutdownCoordinator::new(),
