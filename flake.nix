@@ -25,6 +25,14 @@
             jq
             websocat
           ];
+
+          # nix develop overwrites $SHELL with stdenv's readline-less bash,
+          # which breaks prompt escapes and any tool that spawns $SHELL
+          # interactively (including wsh). Restore the user's login shell.
+          # Upstream: https://github.com/NixOS/nix/issues/12008
+          shellHook = ''
+            export SHELL="$(getent passwd "$USER" | cut -d: -f7)"
+          '';
         };
       }
     );
