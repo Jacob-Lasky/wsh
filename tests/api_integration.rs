@@ -564,10 +564,10 @@ async fn test_websocket_multiple_outputs() {
 }
 
 #[tokio::test]
-async fn test_nonexistent_route_serves_web_ui() {
+async fn test_nonexistent_route_returns_404() {
     let (app, _input_rx, _output_tx) = create_test_app();
 
-    // Non-API routes are served by the web asset fallback (SPA)
+    // Non-API, non-UI routes return 404
     let response = app
         .oneshot(
             Request::builder()
@@ -578,7 +578,43 @@ async fn test_nonexistent_route_serves_web_ui() {
         .await
         .unwrap();
 
+    assert_ne!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_web_ui_served_under_ui_prefix() {
+    let (app, _input_rx, _output_tx) = create_test_app();
+
+    // Web UI is served under /ui
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ui")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
     assert_eq!(response.status(), StatusCode::OK);
+
+    // Root redirects to /ui
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        response.headers().get("location").unwrap().to_str().unwrap(),
+        "/ui",
+    );
 }
 
 #[tokio::test]

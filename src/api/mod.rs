@@ -6,6 +6,7 @@ pub mod ws_methods;
 
 use axum::{
     extract::DefaultBodyLimit,
+    response::Redirect,
     routing::{get, post},
     Router,
 };
@@ -157,13 +158,16 @@ pub fn router(state: AppState, token: Option<String>) -> Router {
         None => protected,
     };
 
+    let ui = Router::new().fallback(web::web_asset);
+
     Router::new()
+        .route("/", get(|| async { Redirect::temporary("/ui") }))
         .route("/health", get(health))
         .route("/openapi.yaml", get(openapi_spec))
         .route("/docs", get(docs_index))
         .merge(protected)
+        .nest("/ui", ui)
         .layer(DefaultBodyLimit::max(1024 * 1024)) // 1 MB
-        .fallback(web::web_asset)
 }
 
 #[cfg(test)]
@@ -330,8 +334,9 @@ mod tests {
         // This confirms the route exists
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
 
-        // Non-API routes are served by the web asset fallback (SPA)
+        // Non-API, non-UI routes return 404
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/nonexistent")
@@ -340,7 +345,36 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_ne!(response.status(), StatusCode::OK);
+
+        // Web UI is served under /ui (SPA fallback)
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/ui")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+
+        // Root redirects to /ui
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response.headers().get("location").unwrap().to_str().unwrap(),
+            "/ui",
+        );
     }
 
     #[tokio::test]
