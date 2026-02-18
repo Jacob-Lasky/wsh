@@ -66,6 +66,41 @@ wsh kill dev
 
 The server exposes an HTTP/WS API on `127.0.0.1:8080` and a Unix domain socket for client commands (`list`, `kill`, `attach`, `detach`). Use `--ephemeral` to have the server exit when its last session ends. Use `wsh persist` to upgrade a running ephemeral server to persistent mode.
 
+## Your Terminal, in a Browser
+
+Start `wsh`. Open a browser.
+
+```
+http://localhost:8080
+```
+
+Your terminal is there — live, interactive, fully synced. Type in the browser, see it in your terminal. Type in your terminal, see it in the browser. Pull it up on your phone. The session doesn't care where the keystrokes come from.
+
+This ships inside the `wsh` binary. No separate install, no configuration, no dependencies. It exists because once your terminal has a structured API, a production-quality browser client is a *side effect*. Everything here — session management, multiple view modes, mobile support, themes — is just an API client. The same API that AI agents use to drive your terminal. The web UI is the most visceral proof of what that API makes possible.
+
+**Multiple sessions.** Create, switch, rename, and kill sessions from the browser. Swipe between them in focused mode, see them all at once in an overview grid, or tile two or more side-by-side with resizable split panes.
+
+**Full terminal rendering.** 256-color and true-color ANSI, bold/italic/underline/strikethrough, alternate screen buffer — vim, htop, lazygit, and every other TUI works as expected.
+
+**Mobile-first.** Touch gestures, native scrolling, a modifier bar for Ctrl/Esc/arrows. Your terminal, from your phone, for real.
+
+**Themes.** Glass (frosted macOS feel), Neon (cyberpunk with scanlines), Minimal (clean and understated). Cycle with one click.
+
+### Remote Access
+
+```bash
+# Bind to all interfaces (token auto-generated, printed to stderr)
+wsh server --bind 0.0.0.0:8080
+
+# Get the token (paste it into the browser when prompted)
+wsh token
+
+# Open from any device on the network
+# http://<your-ip>:8080
+```
+
+For access over the internet, put it behind an SSH tunnel, Tailscale, or a reverse proxy with TLS. `wsh` provides authentication; your network provides encryption.
+
 ## The Agent Loop
 
 AI agents interact with `wsh` sessions using a simple, universal pattern:
@@ -425,6 +460,7 @@ src/
 │   ├── auth.rs          # Bearer token authentication middleware
 │   ├── error.rs         # ApiError type with structured JSON responses
 │   ├── handlers.rs      # All HTTP/WebSocket handlers
+│   ├── web.rs           # Embedded web UI asset serving (rust_embed)
 │   └── ws_methods.rs    # WebSocket JSON-RPC dispatch and param types
 ├── input/
 │   ├── mod.rs           # Input module exports
@@ -462,6 +498,16 @@ docs/
     ├── overlays.md
     ├── panels.md
     └── websocket.md
+
+web/                             # Browser-based terminal client (Preact + TypeScript)
+├── src/
+│   ├── app.tsx                  # Main application component
+│   ├── api/ws.ts                # WebSocket client and reconnection logic
+│   ├── components/              # Terminal, InputBar, SessionCarousel, StatusBar, etc.
+│   ├── state/sessions.ts        # Global reactive state (Preact Signals)
+│   └── styles/                  # terminal.css, themes.css (glass, neon, minimal)
+├── index.html                   # Entry point
+└── vite.config.ts               # Build config (output to web-dist/ → embedded in binary)
 
 skills/
 └── wsh/
