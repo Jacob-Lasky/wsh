@@ -452,6 +452,10 @@ async fn streaming_loop(
                                 }
                                 break;
                             }
+                            FrameType::Ping => {
+                                let pong = Frame::new(FrameType::Pong, Bytes::new());
+                                let _ = pong.write_to(&mut writer).await;
+                            }
                             FrameType::Detach => {
                                 break;
                             }

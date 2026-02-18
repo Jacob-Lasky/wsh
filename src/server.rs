@@ -535,6 +535,15 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
     let mut detach_rx = session.detach_signal.subscribe();
     let mut visual_update_rx = session.visual_update_tx.subscribe();
 
+    // Keepalive: server sends Ping every 30s, expects Pong within 10s.
+    // Without this, idle sessions would rely on a hard read timeout to
+    // detect stale connections (dead SSH, killed client, etc.).
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+    ping_interval.tick().await; // consume the immediate first tick
+    let mut ping_sent = false;
+    let mut last_pong = tokio::time::Instant::now();
+    let pong_timeout = Duration::from_secs(10);
+
     // Main loop: read from client and session output concurrently
     loop {
         tokio::select! {
@@ -663,23 +672,28 @@ async fn run_streaming<S: AsyncRead + AsyncWrite + Unpin>(
                 }
             }
 
-            // Frames from client (with timeout to detect stale connections)
-            result = async {
-                tokio::time::timeout(
-                    Duration::from_secs(300),
-                    Frame::read_from(&mut reader),
-                ).await
-            } => {
-                let result = match result {
-                    Ok(inner) => inner,
-                    Err(_) => {
-                        tracing::warn!("socket client read timed out (300s idle), disconnecting");
-                        break;
-                    }
-                };
+            // Ping keepalive — detect stale connections (dead SSH, killed client)
+            _ = ping_interval.tick() => {
+                if ping_sent && last_pong.elapsed() > pong_timeout {
+                    tracing::debug!("socket client unresponsive (no pong), disconnecting");
+                    break;
+                }
+                let ping_frame = Frame::new(FrameType::Ping, Bytes::new());
+                if !write_frame_with_timeout(&ping_frame, &mut writer).await {
+                    break;
+                }
+                ping_sent = true;
+            }
+
+            // Frames from client
+            result = Frame::read_from(&mut reader) => {
                 match result {
                     Ok(f) => {
                         match f.frame_type {
+                            FrameType::Pong => {
+                                last_pong = tokio::time::Instant::now();
+                                ping_sent = false;
+                            }
                             FrameType::StdinInput => {
                                 let data = &f.payload;
                                 let mode = input_mode.get();

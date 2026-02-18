@@ -35,6 +35,10 @@ pub enum FrameType {
     // Visual state sync frames (JSON payload, server → client)
     OverlaySync = 0x12,
     PanelSync = 0x13,
+
+    // Keepalive frames (empty payload)
+    Ping = 0x14,
+    Pong = 0x15,
 }
 
 impl FrameType {
@@ -57,6 +61,8 @@ impl FrameType {
             0x11 => Some(Self::StdinInput),
             0x12 => Some(Self::OverlaySync),
             0x13 => Some(Self::PanelSync),
+            0x14 => Some(Self::Ping),
+            0x15 => Some(Self::Pong),
             _ => None,
         }
     }
@@ -394,6 +400,8 @@ mod tests {
             FrameType::StdinInput,
             FrameType::OverlaySync,
             FrameType::PanelSync,
+            FrameType::Ping,
+            FrameType::Pong,
         ];
         for ft in types {
             let byte = ft as u8;
