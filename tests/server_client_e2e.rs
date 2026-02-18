@@ -27,7 +27,7 @@ async fn start_test_server() -> (PathBuf, SessionRegistry) {
 
     tokio::spawn(async move {
         let cancel = tokio_util::sync::CancellationToken::new();
-        wsh::server::serve(sessions_clone, &socket_path, cancel)
+        wsh::server::serve(sessions_clone, &socket_path, cancel, None)
             .await
             .unwrap();
     });

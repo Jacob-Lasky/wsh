@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "preact/hooks";
+import { useCallback } from "preact/hooks";
 import { WshClient } from "./api/ws";
 import {
   sessions,
@@ -9,6 +10,9 @@ import {
   tileSelection,
   connectionState,
   theme,
+  authToken,
+  authRequired,
+  authError,
 } from "./state/sessions";
 import {
   setFullScreen,
@@ -26,6 +30,65 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 // Track unsubscribe functions for per-session subscriptions
 const unsubscribes = new Map<string, () => void>();
 
+function TokenPrompt({ client }: { client: WshClient }) {
+  const error = authError.value;
+  const hasStoredToken = !!authToken.value;
+
+  const handleSubmit = useCallback(
+    (e: Event) => {
+      e.preventDefault();
+      const form = e.target as HTMLFormElement;
+      const input = form.elements.namedItem("token") as HTMLInputElement;
+      const token = input.value.trim();
+      if (!token) return;
+
+      localStorage.setItem("wsh-auth-token", token);
+      authToken.value = token;
+      authError.value = null;
+      authRequired.value = false;
+      client.setToken(token);
+      client.disconnect();
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      client.connect(`${proto}//${location.host}/ws/json`);
+    },
+    [client],
+  );
+
+  const handleClear = useCallback(() => {
+    localStorage.removeItem("wsh-auth-token");
+    authToken.value = null;
+    authError.value = null;
+  }, []);
+
+  return (
+    <div class="auth-prompt-backdrop">
+      <form class="auth-prompt" onSubmit={handleSubmit}>
+        <div class="auth-prompt-title">Authentication Required</div>
+        {error && <div class="auth-prompt-error">{error}</div>}
+        <div class="auth-prompt-desc">
+          This server requires an auth token. Run{" "}
+          <code>wsh token</code> to retrieve it.
+        </div>
+        <input
+          name="token"
+          type="password"
+          class="auth-prompt-input"
+          placeholder="Paste token here"
+          autoFocus
+        />
+        <button type="submit" class="auth-prompt-btn">
+          Connect
+        </button>
+        {hasStoredToken && (
+          <button type="button" class="auth-prompt-clear" onClick={handleClear}>
+            Clear saved token
+          </button>
+        )}
+      </form>
+    </div>
+  );
+}
+
 export function App() {
   const clientRef = useRef<WshClient | null>(null);
 
@@ -33,11 +96,25 @@ export function App() {
     const client = new WshClient();
     clientRef.current = client;
 
+    // Set token from localStorage before connecting
+    if (authToken.value) {
+      client.setToken(authToken.value);
+    }
+
     client.onStateChange = (state) => {
       connectionState.value = state;
       if (state === "connected") {
         initSessions(client);
       }
+    };
+
+    client.onAuthRequired = (reason) => {
+      if (reason === "invalid") {
+        authError.value = "Invalid token. Please try again.";
+      } else {
+        authError.value = null;
+      }
+      authRequired.value = true;
     };
 
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -71,6 +148,7 @@ export function App() {
   // Read connectionState to subscribe to changes (re-render when client connects)
   const _connState = connectionState.value;
   const mode = viewMode.value;
+  const needsAuth = authRequired.value;
   const client = clientRef.current;
 
   if (!client) {
@@ -80,6 +158,10 @@ export function App() {
         <StatusBar client={null} />
       </>
     );
+  }
+
+  if (needsAuth) {
+    return <TokenPrompt client={client} />;
   }
 
   return (
@@ -144,7 +226,9 @@ async function setupSession(
     name,
     ["lines", "cursor", "mode"],
     (event) => {
-      handleEvent(name, event);
+      // Use event.session if available (handles renames without re-subscribe)
+      const target = (event.session as string) ?? name;
+      handleEvent(client, target, event);
     },
   );
   unsubscribes.set(name, unsub);
@@ -216,18 +300,19 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
         s === oldName ? newName : s,
       );
 
+      // Move screen state from old signal to new signal
       const screenState = getScreen(oldName);
       removeScreen(oldName);
       setFullScreen(newName, screenState);
 
+      // Re-key subscriptions — no unsubscribe/resubscribe, no event gap.
+      // The server already updated its forwarding task name.
       const unsub = unsubscribes.get(oldName);
       if (unsub) {
-        unsub();
         unsubscribes.delete(oldName);
+        unsubscribes.set(newName, unsub);
       }
-      setupSession(client, newName).catch((e) => {
-        console.error(`Failed to set up renamed session "${newName}":`, e);
-      });
+      client.rekeySubscription(oldName, newName);
 
       if (focusedSession.value === oldName) {
         focusedSession.value = newName;
@@ -246,7 +331,7 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function handleEvent(session: string, raw: any): void {
+function handleEvent(client: WshClient, session: string, raw: any): void {
   switch (raw.event) {
     case "sync":
     case "diff": {
@@ -275,6 +360,22 @@ function handleEvent(session: string, raw: any): void {
 
     case "mode":
       updateScreen(session, { alternateActive: raw.alternate_active });
+      break;
+
+    case "reset":
+      // Re-fetch full screen state after reset (resize, clear, alt screen, parser restart)
+      client.getScreen(session, "styled").then((screen) => {
+        setFullScreen(session, {
+          lines: screen.lines,
+          cursor: screen.cursor,
+          alternateActive: screen.alternate_active,
+          cols: screen.cols,
+          rows: screen.rows,
+          firstLineIndex: screen.first_line_index,
+        });
+      }).catch((e) => {
+        console.error(`Failed to re-fetch screen after reset for "${session}":`, e);
+      });
       break;
   }
 }

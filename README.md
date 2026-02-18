@@ -150,6 +150,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `list` | List active sessions |
 | `kill <name>` | Kill (destroy) a session |
 | `detach <name>` | Detach all clients from a session (session stays alive) |
+| `token` | Print the server's auth token (retrieved via Unix socket) |
 | `persist` | Upgrade a running server to persistent mode |
 
 #### `server` Flags
@@ -169,7 +170,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `--socket` | (default path) | Path to the Unix domain socket |
 | `--alt-screen` | | Use alternate screen buffer |
 
-#### `list`, `kill`, `detach` Flags
+#### `list`, `kill`, `detach`, `token` Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|

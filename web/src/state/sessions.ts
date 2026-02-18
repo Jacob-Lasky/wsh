@@ -3,6 +3,7 @@ import { signal } from "@preact/signals";
 export type Theme = "glass" | "neon" | "minimal";
 
 const storedTheme = (localStorage.getItem("wsh-theme") as Theme) || "glass";
+const storedAuthToken = localStorage.getItem("wsh-auth-token");
 
 export const sessions = signal<string[]>([]);
 export const focusedSession = signal<string | null>(null);
@@ -17,6 +18,9 @@ export const connectionState = signal<
 >("disconnected");
 export const theme = signal<Theme>(storedTheme);
 export const tileSelection = signal<string[]>([]);
+export const authToken = signal<string | null>(storedAuthToken);
+export const authRequired = signal<boolean>(false);
+export const authError = signal<string | null>(null);
 
 export function toggleTileSelection(session: string): void {
   const current = tileSelection.value;

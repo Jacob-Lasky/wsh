@@ -157,6 +157,13 @@ enum Commands {
         token: Option<String>,
     },
 
+    /// Print the server's auth token (retrieved via Unix socket)
+    Token {
+        /// Path to the Unix domain socket
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {
         /// Address to bind the HTTP/WebSocket API server (for auto-spawn)
@@ -239,6 +246,9 @@ async fn main() -> Result<(), WshError> {
         Some(Commands::Detach { name, socket }) => {
             run_detach(name, socket).await
         }
+        Some(Commands::Token { socket }) => {
+            run_token(socket).await
+        }
         Some(Commands::Persist { value, bind, token }) => {
             run_persist(value, bind, token).await
         }
@@ -309,6 +319,7 @@ async fn run_server(
         server_ws_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
 
+    let socket_token = token.clone();
     let app = api::router(state, token);
 
     // Cancellation token for HTTP server shutdown (supports multiple listeners)
@@ -371,7 +382,7 @@ async fn run_server(
     let socket_cancel = tokio_util::sync::CancellationToken::new();
     let socket_cancel_clone = socket_cancel.clone();
     let socket_handle = tokio::spawn(async move {
-        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone).await {
+        if let Err(e) = server::serve(socket_sessions, &socket_path, socket_cancel_clone, socket_token).await {
             tracing::error!(?e, "Unix socket server error");
         }
     });
@@ -962,8 +973,19 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
                 }
                 Err(_) => {
                     tracing::debug!("spawning daemon");
-                    spawn_server_daemon(&socket_path, &cli.bind, None)?;
+                    spawn_server_daemon(&socket_path, &cli.bind, cli.token.as_deref())?;
                     wait_for_socket(&socket_path).await?;
+
+                    // If binding to a non-loopback address, retrieve and print the token
+                    // so the user knows it before we enter the terminal session.
+                    if !is_loopback(&cli.bind) {
+                        if let Ok(mut token_client) = client::Client::connect(&socket_path).await {
+                            if let Ok(Some(token)) = token_client.get_token().await {
+                                eprintln!("wsh: API token: {}", token);
+                            }
+                        }
+                    }
+
                     client::Client::connect(&socket_path).await.map_err(|e| {
                         eprintln!("wsh: failed to connect to server after spawn: {}", e);
                         WshError::Io(e)
@@ -1197,6 +1219,37 @@ async fn run_detach(name: String, socket: Option<PathBuf>) -> Result<(), WshErro
     }
 
     println!("Session '{}' detached.", name);
+    Ok(())
+}
+
+async fn run_token(socket: Option<PathBuf>) -> Result<(), WshError> {
+    let socket_path = socket.unwrap_or_else(server::default_socket_path);
+    let mut c = match client::Client::connect(&socket_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "wsh token: failed to connect to server at {}: {}",
+                socket_path.display(),
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    match c.get_token().await {
+        Ok(Some(token)) => {
+            println!("{}", token);
+        }
+        Ok(None) => {
+            eprintln!("wsh token: no auth token configured (server is on localhost)");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("wsh token: {}", e);
+            std::process::exit(1);
+        }
+    }
+
     Ok(())
 }
 

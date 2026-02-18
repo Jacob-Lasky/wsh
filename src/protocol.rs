@@ -27,6 +27,8 @@ pub enum FrameType {
     KillSessionResponse = 0x0B,
     DetachSession = 0x0C,
     DetachSessionResponse = 0x0D,
+    GetToken = 0x0E,
+    GetTokenResponse = 0x0F,
 
     // Data frames (raw bytes payload)
     PtyOutput = 0x10,
@@ -57,6 +59,8 @@ impl FrameType {
             0x0B => Some(Self::KillSessionResponse),
             0x0C => Some(Self::DetachSession),
             0x0D => Some(Self::DetachSessionResponse),
+            0x0E => Some(Self::GetToken),
+            0x0F => Some(Self::GetTokenResponse),
             0x10 => Some(Self::PtyOutput),
             0x11 => Some(Self::StdinInput),
             0x12 => Some(Self::OverlaySync),
@@ -332,6 +336,16 @@ pub struct DetachSessionResponseMsg {
     pub name: String,
 }
 
+/// Client → Server: request the server's auth token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTokenMsg {}
+
+/// Server → Client: response with the auth token (if configured).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTokenResponseMsg {
+    pub token: Option<String>,
+}
+
 /// Server → Client: full overlay state sync.
 ///
 /// Sent when any overlay changes, contains ALL current overlays.
@@ -396,6 +410,8 @@ mod tests {
             FrameType::KillSessionResponse,
             FrameType::DetachSession,
             FrameType::DetachSessionResponse,
+            FrameType::GetToken,
+            FrameType::GetTokenResponse,
             FrameType::PtyOutput,
             FrameType::StdinInput,
             FrameType::OverlaySync,
@@ -414,7 +430,7 @@ mod tests {
     fn frame_type_invalid_byte() {
         assert!(FrameType::from_u8(0xFF).is_none());
         assert!(FrameType::from_u8(0x00).is_none());
-        assert!(FrameType::from_u8(0x0E).is_none());
+        assert!(FrameType::from_u8(0x16).is_none());
     }
 
     #[test]
@@ -612,6 +628,30 @@ mod tests {
         let decoded: ErrorMsg = frame.parse_json().unwrap();
         assert_eq!(decoded.code, "session_not_found");
         assert_eq!(decoded.message, "No session named 'foo'");
+    }
+
+    #[test]
+    fn control_frame_get_token() {
+        let msg = GetTokenMsg {};
+        let frame = Frame::control(FrameType::GetToken, &msg).unwrap();
+        assert_eq!(frame.frame_type, FrameType::GetToken);
+        let _decoded: GetTokenMsg = frame.parse_json().unwrap();
+    }
+
+    #[test]
+    fn control_frame_get_token_response_with_token() {
+        let msg = GetTokenResponseMsg { token: Some("abc123".to_string()) };
+        let frame = Frame::control(FrameType::GetTokenResponse, &msg).unwrap();
+        let decoded: GetTokenResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.token, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn control_frame_get_token_response_none() {
+        let msg = GetTokenResponseMsg { token: None };
+        let frame = Frame::control(FrameType::GetTokenResponse, &msg).unwrap();
+        let decoded: GetTokenResponseMsg = frame.parse_json().unwrap();
+        assert_eq!(decoded.token, None);
     }
 
     #[test]

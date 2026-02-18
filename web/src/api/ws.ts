@@ -56,11 +56,18 @@ export class WshClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private url = "";
+  private token: string | null = null;
 
   onStateChange?: (state: "connecting" | "connected" | "disconnected") => void;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onLifecycleEvent?: (event: any) => void;
+
+  onAuthRequired?: (reason: "needed" | "invalid") => void;
+
+  setToken(token: string | null): void {
+    this.token = token;
+  }
 
   connect(url: string): void {
     this.url = url;
@@ -78,6 +85,59 @@ export class WshClient {
     }
   }
 
+  /** Append token query param to a URL if a token is configured. */
+  private buildAuthUrl(url: string): string {
+    if (!this.token) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}token=${encodeURIComponent(this.token)}`;
+  }
+
+  /** Derive an HTTP URL from a WebSocket URL for the auth probe. */
+  private deriveHttpUrl(wsUrl: string): string {
+    return wsUrl
+      .replace(/^ws:/, "http:")
+      .replace(/^wss:/, "https:")
+      .replace(/\/ws\/json$/, "/sessions");
+  }
+
+  /**
+   * Check whether a WebSocket connection failure is due to auth.
+   *
+   * The browser WebSocket API doesn't expose HTTP status codes on failure,
+   * so we can't distinguish "401 Unauthorized" from "server down" from the
+   * close event alone.  This method does a quick HTTP probe to find out.
+   *
+   * Returns true if auth is the problem (and fires onAuthRequired), false
+   * if we should proceed with normal reconnect.
+   */
+  private async probeAuth(): Promise<boolean> {
+    try {
+      const httpUrl = this.deriveHttpUrl(this.url);
+      const headers: Record<string, string> = {};
+      if (this.token) {
+        headers["Authorization"] = `Bearer ${this.token}`;
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      try {
+        const resp = await fetch(httpUrl, { headers, signal: controller.signal });
+        if (resp.status === 401) {
+          this.onAuthRequired?.("needed");
+          return true;
+        }
+        if (resp.status === 403) {
+          this.onAuthRequired?.("invalid");
+          return true;
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch {
+      // Network error or abort — not an auth problem
+    }
+    return false;
+  }
+
   private doConnect(): void {
     this.onStateChange?.("connecting");
     const urls = buildWsUrls(this.url);
@@ -88,7 +148,7 @@ export class WshClient {
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let closedCount = 0;
 
-    const settle = (winner: WebSocket, url: string) => {
+    const settle = (winner: WebSocket) => {
       if (settled) {
         winner.close();
         return;
@@ -121,20 +181,31 @@ export class WshClient {
       this.onStateChange?.("connected");
     };
 
+    const allFailed = () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      this.onStateChange?.("disconnected");
+
+      // WebSocket failed — probe to distinguish auth failure from server down.
+      // If it's an auth problem, probeAuth fires onAuthRequired and we stop.
+      // Otherwise, schedule normal reconnect.
+      this.probeAuth().then((isAuth) => {
+        if (!isAuth) {
+          this.scheduleReconnect();
+        }
+      });
+    };
+
     const tryConnect = (url: string) => {
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(this.buildAuthUrl(url));
       attempts.push(ws);
 
-      ws.onopen = () => settle(ws, url);
+      ws.onopen = () => settle(ws);
       ws.onerror = () => {};
       ws.onclose = () => {
         if (settled) return;
         closedCount++;
-        // All attempts failed — trigger reconnect
         if (closedCount >= attempts.length) {
-          if (fallbackTimer) clearTimeout(fallbackTimer);
-          this.onStateChange?.("disconnected");
-          this.scheduleReconnect();
+          allFailed();
         }
       };
     };
@@ -189,6 +260,17 @@ export class WshClient {
           pending.resolve(resp.result);
         }
       }
+      return;
+    }
+
+    // Server hello — no action needed
+    if ("connected" in msg) return;
+
+    // Lagged notification — server's event buffer overflowed; a sync follows
+    if ("type" in msg && msg.type === "lagged") {
+      console.warn(
+        `Event buffer lagged for session "${msg.session}", ${msg.skipped} events skipped`,
+      );
       return;
     }
 
@@ -255,6 +337,15 @@ export class WshClient {
   /** Remove all local event subscriptions (used on reconnect). */
   clearAllSubscriptions(): void {
     this.eventCallbacks.clear();
+  }
+
+  /** Re-key event callbacks from one session name to another (used on rename). */
+  rekeySubscription(oldSession: string, newSession: string): void {
+    const callbacks = this.eventCallbacks.get(oldSession);
+    if (callbacks) {
+      this.eventCallbacks.delete(oldSession);
+      this.eventCallbacks.set(newSession, callbacks);
+    }
   }
 
   // --- Convenience methods ---

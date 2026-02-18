@@ -26,6 +26,7 @@ pub async fn serve(
     sessions: SessionRegistry,
     socket_path: &Path,
     cancel: tokio_util::sync::CancellationToken,
+    token: Option<String>,
 ) -> io::Result<()> {
     // Remove stale socket file if it exists, but check for active server first.
     // Uses spawn_blocking to avoid blocking the tokio runtime on the connect() syscall
@@ -80,8 +81,9 @@ pub async fn serve(
                 match result {
                     Ok((stream, _addr)) => {
                         let sessions = sessions.clone();
+                        let token = token.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, sessions).await {
+                            if let Err(e) = handle_client(stream, sessions, token).await {
                                 tracing::debug!(?e, "client connection ended");
                             }
                         });
@@ -115,6 +117,7 @@ fn whoami() -> String {
 async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     sessions: SessionRegistry,
+    token: Option<String>,
 ) -> io::Result<()> {
     // Read initial control frame (with timeout to reject idle connections)
     let frame = tokio::time::timeout(
@@ -153,11 +156,14 @@ async fn handle_client<S: AsyncRead + AsyncWrite + Unpin>(
             })?;
             handle_detach_session(&mut stream, sessions, msg).await
         }
+        FrameType::GetToken => {
+            handle_get_token(&mut stream, token).await
+        }
         other => {
             let err = ErrorMsg {
                 code: "invalid_initial_frame".to_string(),
                 message: format!(
-                    "expected CreateSession, AttachSession, ListSessions, KillSession, or DetachSession, got {:?}",
+                    "expected CreateSession, AttachSession, ListSessions, KillSession, DetachSession, or GetToken, got {:?}",
                     other
                 ),
             };
@@ -441,6 +447,18 @@ async fn handle_detach_session<S: AsyncRead + AsyncWrite + Unpin>(
             ))
         }
     }
+}
+
+/// Handle a GetToken request: return the server's auth token (if configured).
+async fn handle_get_token<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: &mut S,
+    token: Option<String>,
+) -> io::Result<()> {
+    let resp = GetTokenResponseMsg { token };
+    let resp_frame = Frame::control(FrameType::GetTokenResponse, &resp)
+        .map_err(io::Error::other)?;
+    resp_frame.write_to(stream).await?;
+    Ok(())
 }
 
 /// Send initial overlay and panel state to a newly connected client.
@@ -770,13 +788,17 @@ mod tests {
     /// Start a test server on a temporary socket and return the path and TempDir.
     /// The caller must keep the TempDir alive for the duration of the test.
     async fn start_test_server(sessions: SessionRegistry) -> (PathBuf, TempDir) {
+        start_test_server_with_token(sessions, None).await
+    }
+
+    async fn start_test_server_with_token(sessions: SessionRegistry, token: Option<String>) -> (PathBuf, TempDir) {
         let dir = TempDir::new().unwrap();
         let socket_path = dir.path().join("test.sock");
         let path = socket_path.clone();
 
         let cancel = tokio_util::sync::CancellationToken::new();
         tokio::spawn(async move {
-            serve(sessions, &socket_path, cancel).await.unwrap();
+            serve(sessions, &socket_path, cancel, token).await.unwrap();
         });
 
         // Wait for socket to appear
@@ -1161,6 +1183,51 @@ mod tests {
         assert_eq!(resp.frame_type, FrameType::Error);
         let err: ErrorMsg = resp.parse_json().unwrap();
         assert_eq!(err.code, "session_not_found");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_token_returns_none() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server(sessions).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = GetTokenMsg {};
+        Frame::control(FrameType::GetToken, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::GetTokenResponse);
+        let token_resp: GetTokenResponseMsg = resp.parse_json().unwrap();
+        assert_eq!(token_resp.token, None);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_token_returns_token() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server_with_token(
+            sessions,
+            Some("test-secret-token".to_string()),
+        ).await;
+
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        let msg = GetTokenMsg {};
+        Frame::control(FrameType::GetToken, &msg)
+            .unwrap()
+            .write_to(&mut stream)
+            .await
+            .unwrap();
+
+        let resp = Frame::read_from(&mut stream).await.unwrap();
+        assert_eq!(resp.frame_type, FrameType::GetTokenResponse);
+        let token_resp: GetTokenResponseMsg = resp.parse_json().unwrap();
+        assert_eq!(token_resp.token, Some("test-secret-token".to_string()));
 
         std::fs::remove_file(&path).ok();
     }

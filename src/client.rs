@@ -224,6 +224,34 @@ impl Client {
         }
     }
 
+    /// Retrieve the server's auth token via the Unix socket.
+    pub async fn get_token(&mut self) -> io::Result<Option<String>> {
+        let msg = GetTokenMsg {};
+        let frame = Frame::control(FrameType::GetToken, &msg)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        frame.write_to(&mut self.stream).await?;
+
+        let resp_frame = Frame::read_from(&mut self.stream).await?;
+        match resp_frame.frame_type {
+            FrameType::GetTokenResponse => {
+                let resp: GetTokenResponseMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Ok(resp.token)
+            }
+            FrameType::Error => {
+                let err: ErrorMsg = resp_frame
+                    .parse_json()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                Err(io::Error::other(format!("{}: {}", err.code, err.message)))
+            }
+            other => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected response frame type: {:?}", other),
+            )),
+        }
+    }
+
     /// Enter the streaming I/O proxy loop.
     ///
     /// Consumes the client, splits the underlying stream, and runs a
@@ -516,13 +544,17 @@ mod tests {
     /// Start a test server on a temporary socket and return the path and TempDir.
     /// The caller must keep the TempDir alive for the duration of the test.
     async fn start_test_server(sessions: SessionRegistry) -> (PathBuf, TempDir) {
+        start_test_server_with_token(sessions, None).await
+    }
+
+    async fn start_test_server_with_token(sessions: SessionRegistry, token: Option<String>) -> (PathBuf, TempDir) {
         let dir = TempDir::new().unwrap();
         let socket_path = dir.path().join("test.sock");
         let path = socket_path.clone();
 
         tokio::spawn(async move {
             let cancel = tokio_util::sync::CancellationToken::new();
-            server::serve(sessions, &socket_path, cancel).await.unwrap();
+            server::serve(sessions, &socket_path, cancel, token).await.unwrap();
         });
 
         // Wait for socket to appear
@@ -873,6 +905,33 @@ mod tests {
         let mut client = Client::connect(&path).await.unwrap();
         let result = client.detach_session("no-such").await;
         assert!(result.is_err());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_get_token_none() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server(sessions).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let token = client.get_token().await.unwrap();
+        assert_eq!(token, None);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_client_get_token_some() {
+        let sessions = SessionRegistry::new();
+        let (path, _dir) = start_test_server_with_token(
+            sessions,
+            Some("my-secret".to_string()),
+        ).await;
+
+        let mut client = Client::connect(&path).await.unwrap();
+        let token = client.get_token().await.unwrap();
+        assert_eq!(token, Some("my-secret".to_string()));
 
         std::fs::remove_file(&path).ok();
     }

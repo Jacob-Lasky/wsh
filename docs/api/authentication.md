@@ -26,8 +26,25 @@ generates a random 32-character alphanumeric token and prints it to stderr:
 
 ```
 $ wsh --bind 0.0.0.0:8080
-wsh: authentication token: aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS
+wsh: API token: aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS
 ```
+
+In standalone mode (no subcommand), the token is printed to stderr after the
+ephemeral server is spawned.
+
+### Retrieving the Token
+
+If the token has scrolled off-screen or the server was started by another
+process, retrieve it from a running server via the Unix socket:
+
+```bash
+$ wsh token
+aB3kM9xR2pL7nQ4wT8yF1vJ6hD5gC0eS
+```
+
+This uses the local Unix socket (no auth required) to retrieve the configured
+token. It prints the token to stdout, or exits with an error if no token is
+configured (i.e., the server is on localhost).
 
 ### Providing Your Own Token
 
@@ -116,6 +133,14 @@ websocat -H 'Authorization: Bearer my-secret-token' ws://host:8080/ws/json
   }
 }
 ```
+
+## Web UI
+
+When the web UI (`/ui`) connects to a server that requires authentication, it
+automatically detects the 401/403 response and presents a token prompt. Enter
+the token (from `wsh token` or the server's stderr output) and the web UI will
+store it in `localStorage` for future sessions. If the server restarts with a
+different token, the web UI will prompt again.
 
 ## Security Notes
 
