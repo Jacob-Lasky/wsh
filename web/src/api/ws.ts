@@ -140,6 +140,19 @@ export class WshClient {
 
   private doConnect(): void {
     this.onStateChange?.("connecting");
+
+    // Probe auth upfront: the browser WebSocket API doesn't expose HTTP
+    // status codes on failure, making it unreliable to distinguish a 401
+    // from a network error via WS close events alone.  By probing the
+    // HTTP API first we get a definitive signal before wasting time on
+    // WebSocket connection attempts that will be rejected.
+    this.probeAuth().then((isAuth) => {
+      if (isAuth) return; // onAuthRequired already fired
+      this.connectWebSocket();
+    });
+  }
+
+  private connectWebSocket(): void {
     const urls = buildWsUrls(this.url);
 
     // Track all in-flight attempts so the winner can close the losers.
@@ -185,9 +198,8 @@ export class WshClient {
       if (fallbackTimer) clearTimeout(fallbackTimer);
       this.onStateChange?.("disconnected");
 
-      // WebSocket failed — probe to distinguish auth failure from server down.
-      // If it's an auth problem, probeAuth fires onAuthRequired and we stop.
-      // Otherwise, schedule normal reconnect.
+      // WebSocket failed — probe again to distinguish auth failure from
+      // server down.  (Auth state may have changed since the upfront probe.)
       this.probeAuth().then((isAuth) => {
         if (!isAuth) {
           this.scheduleReconnect();
