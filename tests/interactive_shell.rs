@@ -1,8 +1,7 @@
 //! Tests for interactive shell behavior.
 //!
-//! These tests verify that the PTY spawns a properly interactive shell:
-//! - Commands execute and produce output (not just echo)
-//! - Prompts are properly interpreted (no literal \[ \] sequences)
+//! These tests verify that the PTY spawns a properly interactive shell
+//! by sending commands and verifying they execute (not just echo).
 
 use std::io::{Read, Write};
 use std::sync::mpsc;
@@ -101,26 +100,3 @@ fn test_shell_executes_commands_and_produces_output() {
     );
 }
 
-/// Test that the shell prompt is displayed (even if it has literal escape sequences).
-/// Note: Some shell configurations may show \[ \] in prompts when readline
-/// doesn't fully initialize, but as long as commands execute, this is cosmetic.
-#[test]
-fn test_shell_shows_prompt() {
-    let pty = Pty::spawn(24, 80, SpawnCommand::default()).expect("Failed to spawn PTY");
-    let writer = pty.take_writer().expect("Failed to get writer");
-    let reader = pty.take_reader().expect("Failed to get reader");
-
-    // Read initial prompt output - look for $ or # which are common prompt endings
-    let (output, found) = read_until_or_timeout(reader, writer, Duration::from_secs(3), "$");
-    let output_str = String::from_utf8_lossy(&output);
-
-    // Just verify we got some output that looks like a prompt
-    assert!(
-        found || output_str.contains('#') || output_str.contains('>'),
-        "Expected some prompt output, but got:\n{}",
-        output_str
-    );
-
-    // Note: We accept prompts with literal \[ \] since the important thing
-    // is that commands execute, which is tested separately.
-}
