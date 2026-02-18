@@ -10,11 +10,12 @@ export function PageIndicator({ sessions, focused }: PageIndicatorProps) {
 
   // Collapse to counter format if many sessions
   if (sessions.length > 8) {
-    const idx = focused ? sessions.indexOf(focused) + 1 : 0;
+    const rawIdx = focused ? sessions.indexOf(focused) : -1;
+    const display = rawIdx >= 0 ? `${rawIdx + 1}` : "-";
     return (
       <div class="page-indicator">
         <span class="page-counter">
-          {idx}/{sessions.length}
+          {display}/{sessions.length}
         </span>
       </div>
     );

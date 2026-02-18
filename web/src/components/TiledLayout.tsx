@@ -1,4 +1,5 @@
-import { useRef, useCallback } from "preact/hooks";
+import { Fragment } from "preact";
+import { useRef, useCallback, useEffect } from "preact/hooks";
 import { tileLayout, focusedSession, viewMode } from "../state/sessions";
 import { SessionPane } from "./SessionPane";
 import type { WshClient } from "../api/ws";
@@ -11,12 +12,14 @@ export function TiledLayout({ client }: TiledLayoutProps) {
   const layout = tileLayout.value;
   const containerRef = useRef<HTMLDivElement>(null);
 
-  if (!layout || layout.sessions.length < 2) {
-    viewMode.value = "focused";
-    return null;
-  }
+  // Revert to focused mode when layout becomes invalid — in an effect, not during render
+  useEffect(() => {
+    if (!layout || layout.sessions.length < 2) {
+      viewMode.value = "focused";
+    }
+  }, [layout]);
 
-  const { sessions: tileSessions, sizes } = layout;
+  const sizes = layout?.sizes ?? [];
 
   const handleResize = useCallback(
     (index: number, e: PointerEvent) => {
@@ -31,7 +34,7 @@ export function TiledLayout({ client }: TiledLayoutProps) {
       let cumAfter = cumBefore + sizes[index] + sizes[index + 1];
 
       const minSize = 0.1;
-      const leftSize = Math.max(minSize, Math.min(relX - cumBefore + sizes[index], cumAfter - cumBefore - minSize));
+      const leftSize = Math.max(minSize, Math.min(relX - cumBefore, cumAfter - cumBefore - minSize));
       const rightSize = cumAfter - cumBefore - leftSize;
 
       const newSizes = [...sizes];
@@ -41,6 +44,12 @@ export function TiledLayout({ client }: TiledLayoutProps) {
     },
     [layout, sizes],
   );
+
+  if (!layout || layout.sessions.length < 2) {
+    return null;
+  }
+
+  const { sessions: tileSessions } = layout;
 
   const handleMaximize = (session: string) => {
     focusedSession.value = session;
@@ -74,7 +83,7 @@ export function TiledLayout({ client }: TiledLayoutProps) {
   return (
     <div class="tiled-layout" ref={containerRef}>
       {tileSessions.map((session, i) => (
-        <>
+        <Fragment key={session}>
           {i > 0 && (
             <TileResizeHandle
               index={i - 1}
@@ -131,7 +140,7 @@ export function TiledLayout({ client }: TiledLayoutProps) {
               <SessionPane session={session} client={client} />
             </div>
           </div>
-        </>
+        </Fragment>
       ))}
     </div>
   );

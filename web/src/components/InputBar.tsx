@@ -112,6 +112,16 @@ export function InputBar({ session, client }: InputBarProps) {
     }
   }, [isFocused]);
 
+  // Clean up sync timer on unmount
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const send = (data: string) => {
     if (!connected) return;
     client.sendInput(session, data).catch((e) => {
@@ -171,12 +181,13 @@ export function InputBar({ session, client }: InputBarProps) {
         } else if (e.key === "Tab" || e.key === "ArrowUp" || e.key === "ArrowDown") {
           scheduleSyncFromTerminal();
         } else if (e.key === "Backspace") {
-          // Remove last char from visual buffer
-          input.value = input.value.slice(0, -1);
+          // Remove last code point from visual buffer (handles multi-byte chars)
+          const chars = Array.from(input.value);
+          chars.pop();
+          input.value = chars.join("");
           prevValueRef.current = input.value;
         }
-        // For other control sequences (arrows, Ctrl+X, Tab, etc.),
-        // keep the visual buffer as-is
+        // For other control sequences (Ctrl+X, etc.), keep the visual buffer as-is
       }
       return;
     }
@@ -191,11 +202,24 @@ export function InputBar({ session, client }: InputBarProps) {
     const current = input.value;
     const prev = prevValueRef.current;
 
-    if (current.length > prev.length) {
-      // New text added — send only the new characters
-      send(current.slice(prev.length));
-    } else if (current.length < prev.length && current.length === 0) {
-      // Full clear (e.g. autocomplete replacement) — ignore, already handled
+    if (current === prev) return;
+
+    // Find common prefix
+    let common = 0;
+    while (common < prev.length && common < current.length && prev[common] === current[common]) {
+      common++;
+    }
+
+    // Characters removed from prev after the common prefix
+    const removed = prev.length - common;
+    // Characters added in current after the common prefix
+    const added = current.slice(common);
+
+    if (removed > 0) {
+      send("\x7f".repeat(removed));
+    }
+    if (added) {
+      send(added);
     }
 
     prevValueRef.current = current;

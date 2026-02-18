@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "preact/hooks";
-import { getScreen } from "../state/terminal";
-import { screens } from "../state/terminal";
+import { getScreenSignal } from "../state/terminal";
+import { connectionState } from "../state/sessions";
 import type { FormattedLine, Span, Color } from "../api/types";
 
 // ANSI 256-color palette (first 16 use CSS vars, rest computed)
@@ -40,8 +40,18 @@ function colorToCSS(c: Color): string {
 
 function spanStyle(span: Span): Record<string, string> {
   const s: Record<string, string> = {};
-  if (span.fg) s.color = colorToCSS(span.fg);
-  if (span.bg) s.backgroundColor = colorToCSS(span.bg);
+
+  let fg = span.fg ? colorToCSS(span.fg) : null;
+  let bg = span.bg ? colorToCSS(span.bg) : null;
+
+  if (span.inverse) {
+    s.color = bg ?? "var(--bg)";
+    s.backgroundColor = fg ?? "var(--fg)";
+  } else {
+    if (fg) s.color = fg;
+    if (bg) s.backgroundColor = bg;
+  }
+
   if (span.bold) s.fontWeight = "bold";
   if (span.faint) s.opacity = "0.5";
   if (span.italic) s.fontStyle = "italic";
@@ -54,8 +64,24 @@ function spanStyle(span: Span): Record<string, string> {
   return s;
 }
 
-function renderLine(line: FormattedLine, lineIdx: number): preact.JSX.Element {
+function renderLine(
+  line: FormattedLine,
+  lineIdx: number,
+  cursor: { col: number } | null,
+): preact.JSX.Element {
   if (typeof line === "string") {
+    if (cursor !== null) {
+      const before = line.slice(0, cursor.col);
+      const cursorChar = line[cursor.col] || " ";
+      const after = line.slice(cursor.col + 1);
+      return (
+        <div class="term-line" key={lineIdx}>
+          {before}
+          <span class="term-cursor">{cursorChar}</span>
+          {after || null}
+        </div>
+      );
+    }
     return (
       <div class="term-line" key={lineIdx}>
         {line || "\u00A0"}
@@ -63,8 +89,15 @@ function renderLine(line: FormattedLine, lineIdx: number): preact.JSX.Element {
     );
   }
 
-  // Styled spans
+  // Styled spans — empty line
   if (line.length === 0) {
+    if (cursor !== null) {
+      return (
+        <div class="term-line" key={lineIdx}>
+          <span class="term-cursor">{" "}</span>
+        </div>
+      );
+    }
     return (
       <div class="term-line" key={lineIdx}>
         {"\u00A0"}
@@ -72,13 +105,51 @@ function renderLine(line: FormattedLine, lineIdx: number): preact.JSX.Element {
     );
   }
 
+  // Styled spans — no cursor on this line
+  if (cursor === null) {
+    return (
+      <div class="term-line" key={lineIdx}>
+        {line.map((span, i) => (
+          <span key={i} style={spanStyle(span)}>
+            {span.text}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  // Styled spans — cursor on this line, split at cursor.col
+  const elements: preact.JSX.Element[] = [];
+  let col = 0;
+  let cursorRendered = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const span = line[i];
+    const spanEnd = col + span.text.length;
+
+    if (!cursorRendered && cursor.col >= col && cursor.col < spanEnd) {
+      const offset = cursor.col - col;
+      const before = span.text.slice(0, offset);
+      const cursorChar = span.text[offset] || " ";
+      const after = span.text.slice(offset + 1);
+
+      if (before) elements.push(<span key={`${i}a`} style={spanStyle(span)}>{before}</span>);
+      elements.push(<span key={`${i}c`} class="term-cursor">{cursorChar}</span>);
+      if (after) elements.push(<span key={`${i}b`} style={spanStyle(span)}>{after}</span>);
+      cursorRendered = true;
+    } else {
+      elements.push(<span key={i} style={spanStyle(span)}>{span.text}</span>);
+    }
+    col = spanEnd;
+  }
+
+  if (!cursorRendered) {
+    elements.push(<span key="cursor" class="term-cursor">{" "}</span>);
+  }
+
   return (
     <div class="term-line" key={lineIdx}>
-      {line.map((span, i) => (
-        <span key={i} style={spanStyle(span)}>
-          {span.text}
-        </span>
-      ))}
+      {elements}
     </div>
   );
 }
@@ -89,28 +160,49 @@ interface TerminalProps {
 
 export function Terminal({ session }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const userScrolledRef = useRef(false);
 
-  // Subscribe to screens signal to trigger re-renders
-  const _screens = screens.value;
+  // Subscribe only to this session's signal (not all sessions)
+  const screen = getScreenSignal(session).value;
+  const disconnected = connectionState.value !== "connected";
 
-  // Auto-scroll to bottom when new content arrives (only in normal mode)
+  // Track manual scrolling
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const screen = getScreen(session);
-    if (!screen.alternateActive) {
+    const handleScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+      userScrolledRef.current = !atBottom;
+    };
+    el.addEventListener("scroll", handleScroll);
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Auto-scroll to bottom when new content arrives (only in normal mode, only if at bottom)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!screen.alternateActive && !userScrolledRef.current) {
       el.scrollTop = el.scrollHeight;
     }
   });
 
-  const screen = getScreen(session);
   const containerClass = screen.alternateActive
     ? "terminal-container alternate"
     : "terminal-container";
 
+  const cursorLineIndex = screen.cursor.visible
+    ? screen.firstLineIndex + screen.cursor.row
+    : -1;
+
   return (
     <div class={containerClass} ref={containerRef}>
-      {screen.lines.map((line, i) => renderLine(line, i))}
+      {screen.lines.map((line, i) =>
+        renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
+      )}
+      {disconnected && (
+        <div class="terminal-disconnected">Connection lost</div>
+      )}
     </div>
   );
 }

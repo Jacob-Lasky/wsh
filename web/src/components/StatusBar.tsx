@@ -5,6 +5,8 @@ import {
   viewMode,
   theme,
   cycleTheme,
+  sessions,
+  sessionOrder,
 } from "../state/sessions";
 import type { WshClient } from "../api/ws";
 
@@ -35,7 +37,13 @@ export function StatusBar({ client }: StatusBarProps) {
     if (!client || connected !== "connected") return;
     try {
       const created = await client.createSession();
+      // Eagerly update state — lifecycle event handler will deduplicate
+      if (!sessions.value.includes(created.name)) {
+        sessions.value = [...sessions.value, created.name];
+        sessionOrder.value = [...sessionOrder.value, created.name];
+      }
       focusedSession.value = created.name;
+      viewMode.value = "focused";
     } catch (e) {
       console.error("Failed to create session:", e);
     }
