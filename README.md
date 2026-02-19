@@ -29,11 +29,14 @@ wsh
 # In another terminal, list sessions
 wsh list
 
-# Start a second session
-wsh --name dev
+# Start a second session with tags
+wsh --name dev --tag build --tag frontend
 
 # Attach to an existing session
 wsh attach dev
+
+# Manage tags on a running session
+wsh tag dev --add production --remove draft
 
 # Kill a session
 wsh kill dev
@@ -49,10 +52,10 @@ For persistent operation (e.g., hosting sessions for AI agents):
 # Start the server daemon (persistent by default)
 wsh server
 
-# Create a session via the API
+# Create a session via the API (with optional tags)
 curl -X POST http://localhost:8080/sessions \
   -H 'Content-Type: application/json' \
-  -d '{"name": "dev"}'
+  -d '{"name": "dev", "tags": ["build"]}'
 
 # Attach to it from another terminal
 wsh attach dev
@@ -174,6 +177,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `-c` | | | Command string to execute (like `sh -c`) |
 | `-i` | | | Force interactive mode |
 | `--name` | | `default` | Name for the session |
+| `--tag` | | | Tag for the session (repeatable) |
 | `--alt-screen` | | | Use alternate screen buffer |
 
 ### Subcommands
@@ -184,6 +188,7 @@ Once installed, the skills are available automatically. Claude Code will load th
 | `attach <name>` | Attach to an existing session on the server |
 | `list` | List active sessions |
 | `kill <name>` | Kill (destroy) a session |
+| `tag <name>` | Add or remove tags on a session |
 | `detach <name>` | Detach all clients from a session (session stays alive) |
 | `token` | Print the server's auth token (retrieved via Unix socket) |
 | `persist` | Upgrade a running server to persistent mode |
@@ -229,7 +234,7 @@ All session-specific endpoints are nested under `/sessions/:name/`. When running
 | `GET` | `/sessions` | List all sessions |
 | `POST` | `/sessions` | Create a new session |
 | `GET` | `/sessions/:name` | Get session info |
-| `PATCH` | `/sessions/:name` | Rename a session |
+| `PATCH` | `/sessions/:name` | Update a session (rename, add/remove tags) |
 | `DELETE` | `/sessions/:name` | Kill (destroy) a session |
 | `POST` | `/sessions/:name/detach` | Detach all clients from a session |
 
@@ -347,13 +352,14 @@ curl -X POST http://localhost:8080/sessions/default/panel \
 # Start the server
 wsh server &
 
-# Create a session via the API
+# Create a session via the API (with optional tags)
 curl -X POST http://localhost:8080/sessions \
   -H 'Content-Type: application/json' \
-  -d '{"name": "dev"}'
+  -d '{"name": "dev", "tags": ["build"]}'
 
-# List sessions
+# List sessions (optionally filter by tag)
 curl -s http://localhost:8080/sessions | jq .
+curl -s 'http://localhost:8080/sessions?tag=build' | jq .
 
 # Attach from the terminal
 wsh attach dev

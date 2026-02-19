@@ -55,6 +55,7 @@ You can specify:
 - `rows`, `cols` — terminal dimensions
 - `cwd` — working directory
 - `env` — environment variables (object of key-value pairs)
+- `tags` — string labels for grouping and filtering
 
 A session with a `command` will exit when that command
 finishes. A session without one starts an interactive shell
@@ -100,12 +101,12 @@ common coordination patterns.
 ### Fan-Out: Run in Parallel, Gather Results
 
 Spawn several sessions, kick off work in each, then poll
-them for completion:
+them for completion. Tag them for easy group operations:
 
-    # Create sessions and start work
-    create session "test-unit", send: npm run test:unit
-    create session "test-e2e", send: npm run test:e2e
-    create session "lint", send: npm run lint
+    # Create sessions and start work (all tagged "ci")
+    create session "test-unit" tagged: ci, send: npm run test:unit
+    create session "test-e2e" tagged: ci, send: npm run test:e2e
+    create session "lint" tagged: ci, send: npm run lint
 
     # Poll each for completion
     for each session:
@@ -120,16 +121,17 @@ them for completion:
 This is the most common pattern. The key insight: you don't
 have to wait for one to finish before checking another.
 
-**Best approach — wait for any session:**
+**Best approach — wait for any session (with tag filter):**
 
-    wait for quiescence on any session (timeout 1000ms)
+    wait for quiescence on sessions tagged "ci" (timeout 1000ms)
     # returns the name of whichever session settled first
     # read its screen, check if done
     # repeat with last_session + last_generation to avoid
     # re-returning the same session immediately
 
-This races all sessions and returns the first to settle.
-Much more efficient than polling each one individually.
+This races all tagged sessions and returns the first to settle.
+Much more efficient than polling each one individually. The tag
+filter ensures unrelated sessions don't interfere.
 
 **Alternative — poll round-robin:**
 
@@ -180,9 +182,9 @@ discipline:
 - If you're doing a fan-out, clean up all sessions when
   the fan-out is complete
 
-### Naming Discipline
-Names are how you keep track of what's what. Use descriptive,
-consistent names:
+### Naming and Tagging Discipline
+Names are how you identify individual sessions. Tags are how
+you group them. Use both for organization:
 
     Good: "test-unit", "test-e2e", "build-frontend"
     Bad:  "session1", "s2", "tmp"
@@ -192,6 +194,20 @@ naming scheme so you can iterate over them later:
 
     test-0, test-1, test-2
     build-api, build-web, build-docs
+
+Tags let you group related sessions for bulk operations.
+Tag all test sessions with "test", all build sessions with
+"build", then list or wait-for-quiescence on just that group:
+
+    create "test-unit" tagged: test
+    create "test-e2e" tagged: test
+    create "lint" tagged: test
+
+    list sessions tagged "test"
+    wait for quiescence on sessions tagged "test"
+
+Tags can be added and removed after creation, so you can
+re-categorize sessions as their role changes.
 
 ### Don't Multiplex What Doesn't Need It
 If you just need to run three commands in sequence, one

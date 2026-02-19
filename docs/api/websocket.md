@@ -871,16 +871,23 @@ Server-level methods do not require the `session` field.
 
 #### `list_sessions`
 
-List all active sessions.
+List all active sessions. Optionally filter by tags.
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `tag` | string[] | no | Tag filter (union/OR semantics) |
 
 ```json
 {"id": 1, "method": "list_sessions"}
+{"id": 1, "method": "list_sessions", "params": {"tag": ["build", "test"]}}
 ```
 
 **Result:**
 
 ```json
-{"id": 1, "method": "list_sessions", "result": [{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}, {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}]}
+{"id": 1, "method": "list_sessions", "result": [{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": []}, {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build"]}]}
 ```
 
 #### `create_session`
@@ -897,15 +904,16 @@ Create a new session.
 | `cols` | integer | no | Terminal columns (default: 80) |
 | `cwd` | string | no | Working directory |
 | `env` | object | no | Additional environment variables |
+| `tags` | string[] | no | Initial tags |
 
 ```json
-{"id": 2, "method": "create_session", "params": {"name": "dev", "command": "bash", "cwd": "/home/user/project"}}
+{"id": 2, "method": "create_session", "params": {"name": "dev", "command": "bash", "tags": ["build"]}}
 ```
 
 **Result:**
 
 ```json
-{"id": 2, "method": "create_session", "result": {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}}
+{"id": 2, "method": "create_session", "result": {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build"]}}
 ```
 
 #### `kill_session`
@@ -952,10 +960,34 @@ Rename an existing session.
 **Result:**
 
 ```json
-{"id": 4, "method": "rename_session", "result": {"name": "prod"}}
+{"id": 4, "method": "rename_session", "result": {"name": "prod", "tags": ["build"]}}
 ```
 
 **Errors:** `session_not_found` if the session doesn't exist, `session_name_conflict` if the new name is already taken.
+
+#### `update_tags`
+
+Add and/or remove tags on a session.
+
+**Params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `session` | string | yes | Session name |
+| `add` | string[] | no | Tags to add |
+| `remove` | string[] | no | Tags to remove |
+
+```json
+{"id": 5, "method": "update_tags", "params": {"session": "dev", "add": ["build", "ci"], "remove": ["draft"]}}
+```
+
+**Result:** Full `SessionInfo` object with updated tags.
+
+```json
+{"id": 5, "method": "update_tags", "result": {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": ["build", "ci"]}}
+```
+
+**Errors:** `session_not_found` if the session doesn't exist, `invalid_tag` if a tag fails validation.
 
 #### `set_server_mode`
 
@@ -991,6 +1023,12 @@ The server-level WebSocket automatically broadcasts session lifecycle events:
 
 ```json
 {"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
+```
+
+**Session tags changed:**
+
+```json
+{"event": "session_tags_changed", "params": {"name": "dev", "added": ["build"], "removed": ["draft"]}}
 ```
 
 **Session destroyed** (killed via API, or PTY process exited):

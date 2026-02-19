@@ -685,6 +685,14 @@ paths:
             When true, always observe at least timeout_ms of real silence
             before responding, even if a session is already idle. Trades
             latency for API simplicity (no generation tracking required).
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Comma-separated tag filter. Only sessions matching at least
+            one of the specified tags are considered.
       responses:
         "200":
           description: A session is quiescent. Returns session name and screen state.
@@ -912,6 +920,15 @@ paths:
       operationId: listSessions
       summary: List all active sessions
       tags: [session]
+      parameters:
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Comma-separated tag filter. Only sessions matching at least one
+            of the specified tags are returned.
       responses:
         "200":
           description: Array of all sessions.
@@ -998,15 +1015,15 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
     patch:
-      operationId: renameSession
-      summary: Rename a session
+      operationId: updateSession
+      summary: Update a session (rename, add/remove tags)
       tags: [session]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RenameSessionRequest"
+              $ref: "#/components/schemas/UpdateSessionRequest"
       responses:
         "200":
           description: Session renamed.
@@ -1592,6 +1609,15 @@ components:
       required: [name]
       properties:
         name: { type: string }
+        pid: { type: integer }
+        command: { type: string }
+        rows: { type: integer, minimum: 1 }
+        cols: { type: integer, minimum: 1 }
+        clients: { type: integer, minimum: 0 }
+        tags:
+          type: array
+          items: { type: string }
+          description: Sorted alphabetically. Empty array when no tags.
 
     CreateSessionRequest:
       type: object
@@ -1619,14 +1645,27 @@ components:
           type: object
           additionalProperties: { type: string }
           description: Additional environment variables.
+        tags:
+          type: array
+          items: { type: string }
+          description: >
+            Initial tags (1-64 chars, alphanumeric plus hyphens,
+            underscores, and dots).
 
-    RenameSessionRequest:
+    UpdateSessionRequest:
       type: object
-      required: [name]
       properties:
         name:
           type: string
-          description: New session name.
+          description: New session name (optional).
+        add_tags:
+          type: array
+          items: { type: string }
+          description: Tags to add.
+        remove_tags:
+          type: array
+          items: { type: string }
+          description: Tags to remove.
 
     # --- Server Management ---
 
@@ -1960,6 +1999,7 @@ components:
                 - max_sessions_reached
                 - session_create_failed
                 - session_name_conflict
+                - invalid_tag
                 - not_focusable
                 - already_in_alt_screen
                 - not_in_alt_screen

@@ -60,7 +60,7 @@ Per-session endpoints are nested under `/sessions/:name`.
 | `GET` | `/sessions` | List all sessions |
 | `POST` | `/sessions` | Create a new session |
 | `GET` | `/sessions/:name` | Get session info |
-| `PATCH` | `/sessions/:name` | Rename a session |
+| `PATCH` | `/sessions/:name` | Update a session (rename, add/remove tags) |
 | `DELETE` | `/sessions/:name` | Kill (destroy) a session |
 
 ### Server Management Endpoints
@@ -96,7 +96,7 @@ curl http://localhost:8080/health
 
 # List sessions
 curl http://localhost:8080/sessions
-# [{"name":"default","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":1}]
+# [{"name":"default","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":1,"tags":[]}]
 
 # Get current screen contents
 curl http://localhost:8080/sessions/default/screen
@@ -121,11 +121,11 @@ wsh server
 curl -X POST http://localhost:8080/sessions \
   -H 'Content-Type: application/json' \
   -d '{"name": "dev"}'
-# {"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0}
+# {"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0,"tags":[]}
 
 # List sessions
 curl http://localhost:8080/sessions
-# [{"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0}]
+# [{"name":"dev","pid":12345,"command":"/bin/bash","rows":24,"cols":80,"clients":0,"tags":[]}]
 
 # Get the session's screen
 curl http://localhost:8080/sessions/dev/screen
@@ -410,9 +410,9 @@ quiescence sync via the `quiesce_ms` parameter.
 GET /quiesce?timeout_ms=2000
 ```
 
-Races quiescence detection across **all** sessions, returning the first
-session to become quiescent. The response includes the session name so you
-know which session settled.
+Races quiescence detection across **all** sessions (or a tag-filtered subset),
+returning the first session to become quiescent. The response includes the
+session name so you know which session settled.
 
 **Query parameters:**
 
@@ -424,6 +424,7 @@ know which session settled.
 | `last_generation` | integer | (none) | Generation from a previous response; paired with `last_session` |
 | `last_session` | string | (none) | Session name from a previous response; paired with `last_generation` |
 | `fresh` | boolean | `false` | Always observe real silence for `timeout_ms` before responding |
+| `tag` | string | (none) | Comma-separated tag filter; only tagged sessions are considered |
 
 **Response (200):**
 
@@ -476,6 +477,7 @@ wsh provides several subcommands for interacting with a running server:
 | `wsh list` | List active sessions |
 | `wsh kill <name>` | Destroy a session |
 | `wsh detach <name>` | Detach all clients from a session |
+| `wsh tag <name>` | Add or remove tags on a session |
 | `wsh mcp` | MCP stdio bridge (connects to server) |
 | `wsh persist [on\|off]` | Query or set server persistence mode |
 
@@ -520,7 +522,8 @@ wsh list [--socket <path>]
 ```
 
 Lists active sessions on the server via the Unix socket. Output is a table
-showing NAME, PID, COMMAND, SIZE (rows x cols), and CLIENTS for each session.
+showing NAME, PID, COMMAND, SIZE (rows x cols), CLIENTS, and TAGS for each
+session.
 
 #### `wsh kill`
 
@@ -538,6 +541,21 @@ wsh detach <name> [--socket <path>]
 
 Detaches all connected clients from a named session via the Unix socket. The
 session itself remains alive -- only the client connections are dropped.
+
+#### `wsh tag`
+
+```bash
+wsh tag <name> --add <tag> --remove <tag> [--socket <path>]
+```
+
+Add or remove tags on a named session. Both `--add` and `--remove` can be
+specified multiple times and are applied in a single operation.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--add` | | Tag to add (repeatable) |
+| `--remove` | | Tag to remove (repeatable) |
+| `--socket` | (default path) | Path to the Unix domain socket |
 
 #### `wsh persist`
 
@@ -560,19 +578,32 @@ GET /sessions
 
 Returns an array of all active sessions.
 
+**Query parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tag` | string | (none) | Comma-separated tag filter (union/OR semantics) |
+
+When `tag` is provided, only sessions matching at least one of the specified tags
+are returned.
+
 **Response:** `200 OK`
 
 ```json
 [
-  {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1},
-  {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}
+  {"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": ["frontend"]},
+  {"name": "build", "pid": 12346, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build", "ci"]}
 ]
 ```
 
 **Example:**
 
 ```bash
+# List all sessions
 curl http://localhost:8080/sessions
+
+# List only sessions tagged "build" or "test"
+curl 'http://localhost:8080/sessions?tag=build,test'
 ```
 
 #### Create a Session
@@ -591,7 +622,8 @@ Content-Type: application/json
   "rows": 24,
   "cols": 80,
   "cwd": "/home/user/project",
-  "env": {"TERM": "xterm-256color"}
+  "env": {"TERM": "xterm-256color"},
+  "tags": ["build", "ci"]
 }
 ```
 
@@ -603,17 +635,19 @@ Content-Type: application/json
 | `cols` | integer | no | Terminal columns (default: 80) |
 | `cwd` | string | no | Working directory |
 | `env` | object | no | Additional environment variables |
+| `tags` | string[] | no | Initial tags (1-64 chars, alphanumeric/hyphens/underscores/dots) |
 
 **Response:** `201 Created`
 
 ```json
-{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 0, "tags": ["build", "ci"]}
 ```
 
 **Errors:**
 
 | Status | Code | When |
 |--------|------|------|
+| 400 | `invalid_tag` | A tag fails validation |
 | 409 | `session_name_conflict` | Name already in use |
 | 500 | `session_create_failed` | PTY spawn or other creation error |
 
@@ -622,7 +656,7 @@ Content-Type: application/json
 ```bash
 curl -X POST http://localhost:8080/sessions \
   -H 'Content-Type: application/json' \
-  -d '{"name": "dev", "command": "bash"}'
+  -d '{"name": "dev", "command": "bash", "tags": ["build"]}'
 ```
 
 #### Get Session Info
@@ -634,7 +668,7 @@ GET /sessions/:name
 **Response:** `200 OK`
 
 ```json
-{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}
+{"name": "dev", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": ["build"]}
 ```
 
 **Errors:**
@@ -649,38 +683,58 @@ GET /sessions/:name
 curl http://localhost:8080/sessions/dev
 ```
 
-#### Rename a Session
+#### Update a Session
 
 ```
 PATCH /sessions/:name
 Content-Type: application/json
 ```
 
+Update a session's name and/or tags. All fields are optional; only provided
+fields take effect.
+
 **Request body:**
 
 ```json
-{"name": "new-name"}
+{
+  "name": "new-name",
+  "add_tags": ["production"],
+  "remove_tags": ["staging"]
+}
 ```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | no | New session name |
+| `add_tags` | string[] | no | Tags to add |
+| `remove_tags` | string[] | no | Tags to remove |
 
 **Response:** `200 OK`
 
 ```json
-{"name": "new-name", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1}
+{"name": "new-name", "pid": 12345, "command": "/bin/bash", "rows": 24, "cols": 80, "clients": 1, "tags": ["production"]}
 ```
 
 **Errors:**
 
 | Status | Code | When |
 |--------|------|------|
+| 400 | `invalid_tag` | A tag fails validation |
 | 404 | `session_not_found` | No session with the original name |
 | 409 | `session_name_conflict` | New name already in use |
 
-**Example:**
+**Examples:**
 
 ```bash
+# Rename a session
 curl -X PATCH http://localhost:8080/sessions/dev \
   -H 'Content-Type: application/json' \
   -d '{"name": "production"}'
+
+# Add and remove tags
+curl -X PATCH http://localhost:8080/sessions/dev \
+  -H 'Content-Type: application/json' \
+  -d '{"add_tags": ["build", "ci"], "remove_tags": ["draft"]}'
 ```
 
 #### Kill a Session
@@ -803,10 +857,12 @@ events. After connecting, the server sends `{"connected": true}`.
 
 | Method | Description |
 |--------|-------------|
-| `list_sessions` | List all active sessions |
-| `create_session` | Create a new session |
+| `list_sessions` | List all active sessions (optional `tag` filter) |
+| `create_session` | Create a new session (optional `tags`) |
 | `kill_session` | Destroy a session |
 | `detach_session` | Detach all clients from a session |
+| `rename_session` | Rename a session |
+| `update_tags` | Add/remove tags on a session |
 | `set_server_mode` | Query or set server mode (ephemeral/persistent) |
 
 **Per-session methods** require a `session` field in the request:
@@ -824,6 +880,7 @@ the same as on the per-session `/sessions/:name/ws/json` endpoint.
 ```json
 {"event": "session_created", "params": {"name": "dev"}}
 {"event": "session_renamed", "params": {"old_name": "dev", "new_name": "prod"}}
+{"event": "session_tags_changed", "params": {"name": "dev", "added": ["build"], "removed": []}}
 {"event": "session_destroyed", "params": {"name": "dev"}}
 ```
 
@@ -910,7 +967,8 @@ The maximum payload size is 16 MiB.
   "cwd": "/home/user",
   "env": {"KEY": "value"},
   "rows": 24,
-  "cols": 80
+  "cols": 80,
+  "tags": ["build"]
 }
 ```
 

@@ -290,9 +290,13 @@ endpoint is always available:
 
     curl -s -X POST http://localhost:8080/sessions \
       -H "Content-Type: application/json" \
-      -d '{"name": "build", "command": "cargo build"}'
+      -d '{"name": "build", "command": "cargo build", "tags": ["build", "ci"]}'
 
-Returns `{"name": "build"}` on success.
+Returns `{"name": "build", "tags": ["build", "ci"]}` on success.
+
+Tags are optional string labels (1-64 chars, alphanumeric plus
+hyphens, underscores, and dots). Use them to group and filter
+sessions by purpose.
 
 ### Interacting with a Specific Session
 All the primitives work per-session by adding `/sessions/:name/`
@@ -304,10 +308,26 @@ as a prefix:
 
 Overlays, panels, and input capture are also per-session.
 
-### Wait for Quiescence on Any Session
-You can race quiescence across all sessions:
+### Filtering Sessions by Tag
 
-    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&format=plain'
+    curl -s 'http://localhost:8080/sessions?tag=build,test'
+
+Returns only sessions that have at least one of the specified tags
+(union/OR semantics).
+
+### Updating Tags
+
+    curl -s -X PATCH http://localhost:8080/sessions/build \
+      -H "Content-Type: application/json" \
+      -d '{"add_tags": ["production"], "remove_tags": ["draft"]}'
+
+Tags can be added and removed alongside a rename in a single PATCH.
+
+### Wait for Quiescence on Any Session
+You can race quiescence across all sessions (or a tag-filtered
+subset):
+
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&format=plain'
 
 Returns the first session to become quiescent, including its name:
 
@@ -316,7 +336,11 @@ Returns the first session to become quiescent, including its name:
 To avoid re-returning the same session, pass `last_session` and
 `last_generation` from the previous response:
 
-    curl -s 'http://localhost:8080/sessions/default/quiesce?timeout_ms=2000&last_session=build&last_generation=7'
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&last_session=build&last_generation=7'
+
+To scope quiescence to specific tags:
+
+    curl -s 'http://localhost:8080/quiesce?timeout_ms=2000&tag=build'
 
 Returns 404 (`no_sessions`) if no sessions exist. Returns 408 if no
 session settles within `max_wait_ms`.
@@ -324,17 +348,22 @@ session settles within `max_wait_ms`.
 ### Session Lifecycle
 
     curl -s http://localhost:8080/sessions              # list all
+    curl -s 'http://localhost:8080/sessions?tag=build'  # list by tag
     curl -s http://localhost:8080/sessions/build         # get info
     curl -s -X PATCH http://localhost:8080/sessions/build \
       -H "Content-Type: application/json" \
       -d '{"name": "build-v2"}'                         # rename
+    curl -s -X PATCH http://localhost:8080/sessions/build \
+      -H "Content-Type: application/json" \
+      -d '{"add_tags": ["ci"]}'                         # add tags
     curl -s -X DELETE http://localhost:8080/sessions/build  # kill
 
 ### Default Session
 When wsh is started with `wsh` (no arguments), it auto-spawns a
 server daemon and creates a session named `default`. Use
 `/sessions/default/` prefix for all endpoints. If started with
-`--name`, the session has that name instead.
+`--name`, the session has that name instead. Tags can be set at
+startup with `--tag`.
 
 ## Specialized Skills
 

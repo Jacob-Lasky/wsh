@@ -261,19 +261,26 @@ to manage session lifecycle:
 
     wsh_list_sessions()                          # list all
     wsh_list_sessions(session="build")           # get details for one
+    wsh_list_sessions(tag=["build", "ci"])        # filter by tags
 
 ### Create Sessions
 
-    wsh_create_session(name="build", command="cargo build")
+    wsh_create_session(name="build", command="cargo build", tags=["build", "ci"])
 
-Optional parameters: `rows`, `cols`, `cwd`, `env`.
-Returns `{"name": "build", "rows": 24, "cols": 80}`.
+Optional parameters: `rows`, `cols`, `cwd`, `env`, `tags`.
+Returns `{"name": "build", "rows": 24, "cols": 80, "tags": ["build", "ci"]}`.
+
+Tags are optional string labels (1-64 chars, alphanumeric plus
+hyphens, underscores, and dots). Use them to group and filter
+sessions by purpose.
 
 ### Manage Sessions
 
     wsh_manage_session(session="build", action="kill")            # destroy
     wsh_manage_session(session="build", action="rename", new_name="build-v2")  # rename
     wsh_manage_session(session="build", action="detach")          # disconnect clients
+    wsh_manage_session(session="build", action="add_tags", tags=["production"])  # add tags
+    wsh_manage_session(session="build", action="remove_tags", tags=["draft"])    # remove tags
 
 ### Default Session
 When wsh is started with `wsh` (no arguments), it auto-spawns a
