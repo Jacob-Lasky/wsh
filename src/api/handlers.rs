@@ -2359,7 +2359,7 @@ pub(super) struct UpdateSessionRequest {
 
 #[derive(Deserialize)]
 pub(super) struct ListSessionsQuery {
-    /// Comma-separated list of tags, or repeated `?tag=a&tag=b` params.
+    /// Comma-separated list of tags (e.g. `?tag=build,test`).
     #[serde(default)]
     pub tag: Option<String>,
 }
@@ -2415,7 +2415,7 @@ pub(super) async fn session_create(
         RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
         RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
         RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
-        RegistryError::InvalidTag(msg) => ApiError::InvalidRequest(msg),
+        RegistryError::InvalidTag(msg) => ApiError::InvalidTag(msg),
     })?;
 
     // Use a placeholder name for spawn; registry.insert will assign the real name.
@@ -2450,7 +2450,7 @@ pub(super) async fn session_create(
                 RegistryError::NameExists(n) => ApiError::SessionNameConflict(n),
                 RegistryError::NotFound(n) => ApiError::SessionNotFound(n),
                 RegistryError::MaxSessionsReached => ApiError::MaxSessionsReached,
-                RegistryError::InvalidTag(msg) => ApiError::InvalidRequest(msg),
+                RegistryError::InvalidTag(msg) => ApiError::InvalidTag(msg),
             });
         }
     };
