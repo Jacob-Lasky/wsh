@@ -1,4 +1,4 @@
-import type { WsRequest, WsResponse, EventType, ScreenResponse } from "./types";
+import type { WsRequest, WsResponse, EventType, ScreenResponse, ScrollbackResponse } from "./types";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -386,6 +386,23 @@ export class WshClient {
 
   async sendInput(session: string, data: string): Promise<void> {
     await this.request("send_input", { data }, session);
+  }
+
+  async resize(session: string, cols: number, rows: number): Promise<void> {
+    await this.request("resize", { cols, rows }, session);
+  }
+
+  async getScrollback(
+    session: string,
+    offset: number,
+    limit: number,
+  ): Promise<ScrollbackResponse> {
+    const result = await this.request(
+      "get_scrollback",
+      { format: "styled", offset, limit },
+      session,
+    );
+    return result as ScrollbackResponse;
   }
 
   subscribe(

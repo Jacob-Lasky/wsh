@@ -1,7 +1,14 @@
-import { useRef, useEffect } from "preact/hooks";
-import { getScreenSignal } from "../state/terminal";
-import { connectionState } from "../state/sessions";
+import { useRef, useEffect, useCallback } from "preact/hooks";
+import { getScreenSignal, updateScreen } from "../state/terminal";
+import { connectionState, zoomLevel } from "../state/sessions";
+import type { WshClient } from "../api/ws";
 import type { FormattedLine, Span, Color } from "../api/types";
+
+/** How many scrollback lines to fetch per page. */
+const SCROLLBACK_PAGE_SIZE = 200;
+
+/** Trigger scrollback fetch when scrollTop is within this many px of top. */
+const SCROLLBACK_THRESHOLD = 100;
 
 // ANSI 256-color palette (first 16 use CSS vars, rest computed)
 const ANSI_256: string[] = [];
@@ -154,29 +161,152 @@ function renderLine(
   );
 }
 
+/** Base font size in px — zoom multiplies this. */
+const BASE_FONT_SIZE = 14;
+
+/** Debounce delay for resize events (ms). */
+const RESIZE_DEBOUNCE_MS = 150;
+
 interface TerminalProps {
   session: string;
+  client?: WshClient;
 }
 
-export function Terminal({ session }: TerminalProps) {
+export function Terminal({ session, client }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
   const userScrolledRef = useRef(false);
+  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   // Subscribe only to this session's signal (not all sessions)
   const screen = getScreenSignal(session).value;
   const disconnected = connectionState.value !== "connected";
+  const zoom = zoomLevel.value;
+  const fontSize = BASE_FONT_SIZE * zoom;
 
-  // Track manual scrolling
+  // Measure character cell size and compute cols/rows for a given container size
+  const computeGridSize = useCallback(() => {
+    const measure = measureRef.current;
+    const container = containerRef.current;
+    if (!measure || !container) return null;
+
+    const rect = measure.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+
+    const cellWidth = rect.width;
+    const cellHeight = rect.height;
+
+    // Account for container padding (4px top/bottom, 8px left/right)
+    const style = getComputedStyle(container);
+    const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+
+    const cols = Math.floor((container.clientWidth - padX) / cellWidth);
+    const rows = Math.floor((container.clientHeight - padY) / cellHeight);
+
+    return { cols: Math.max(cols, 1), rows: Math.max(rows, 1) };
+  }, []);
+
+  // ResizeObserver — debounced resize sent to server
+  useEffect(() => {
+    if (!client) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver(() => {
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = setTimeout(() => {
+        const size = computeGridSize();
+        if (!size) return;
+        const last = lastSizeRef.current;
+        if (last && last.cols === size.cols && last.rows === size.rows) return;
+        lastSizeRef.current = size;
+        client.resize(session, size.cols, size.rows).catch(() => {});
+      }, RESIZE_DEBOUNCE_MS);
+    });
+
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+    };
+  }, [session, client, computeGridSize]);
+
+  // Re-trigger resize measurement when zoom changes
+  useEffect(() => {
+    if (!client) return;
+    // Small delay to let the browser reflow with new font size
+    const timer = setTimeout(() => {
+      const size = computeGridSize();
+      if (!size) return;
+      const last = lastSizeRef.current;
+      if (last && last.cols === size.cols && last.rows === size.rows) return;
+      lastSizeRef.current = size;
+      client.resize(session, size.cols, size.rows).catch(() => {});
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [zoom, session, client, computeGridSize]);
+
+  // Fetch scrollback when user scrolls near the top
+  const fetchScrollback = useCallback(() => {
+    if (!client) return;
+    if (screen.scrollbackComplete || screen.scrollbackLoading) return;
+    if (screen.alternateActive) return;
+
+    // Number of scrollback lines available = firstLineIndex
+    const scrollbackAvailable = screen.firstLineIndex;
+    if (scrollbackAvailable <= 0) return;
+    if (screen.scrollbackOffset >= scrollbackAvailable) {
+      updateScreen(session, { scrollbackComplete: true });
+      return;
+    }
+
+    updateScreen(session, { scrollbackLoading: true });
+
+    // Fetch from the end of scrollback backwards
+    const remaining = scrollbackAvailable - screen.scrollbackOffset;
+    const limit = Math.min(SCROLLBACK_PAGE_SIZE, remaining);
+    const offset = scrollbackAvailable - screen.scrollbackOffset - limit;
+
+    client
+      .getScrollback(session, Math.max(0, offset), limit)
+      .then((resp) => {
+        const sig = getScreenSignal(session);
+        const current = sig.value;
+        // Prepend new lines before existing scrollback
+        const newScrollback = [...resp.lines, ...current.scrollbackLines];
+        const newOffset = current.scrollbackOffset + resp.lines.length;
+        sig.value = {
+          ...current,
+          scrollbackLines: newScrollback,
+          scrollbackOffset: newOffset,
+          scrollbackComplete: newOffset >= current.firstLineIndex || resp.lines.length < limit,
+          scrollbackLoading: false,
+          totalLines: resp.total_lines,
+        };
+      })
+      .catch(() => {
+        updateScreen(session, { scrollbackLoading: false });
+      });
+  }, [client, session, screen.scrollbackComplete, screen.scrollbackLoading, screen.alternateActive, screen.firstLineIndex, screen.scrollbackOffset]);
+
+  // Track manual scrolling + trigger scrollback fetch near top
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const handleScroll = () => {
       const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
       userScrolledRef.current = !atBottom;
+
+      // Load more scrollback when near the top
+      if (el.scrollTop < SCROLLBACK_THRESHOLD) {
+        fetchScrollback();
+      }
     };
     el.addEventListener("scroll", handleScroll);
     return () => el.removeEventListener("scroll", handleScroll);
-  }, []);
+  }, [fetchScrollback]);
 
   // Auto-scroll to bottom when new content arrives (only in normal mode, only if at bottom)
   useEffect(() => {
@@ -191,13 +321,38 @@ export function Terminal({ session }: TerminalProps) {
     ? "terminal-container alternate"
     : "terminal-container";
 
+  // Cursor is relative to the screen lines (not scrollback)
+  const scrollbackLen = screen.scrollbackLines.length;
   const cursorLineIndex = screen.cursor.visible
-    ? screen.firstLineIndex + screen.cursor.row
+    ? scrollbackLen + screen.cursor.row
     : -1;
 
+  // Combine scrollback + screen lines for rendering
+  const allLines: FormattedLine[] = screen.alternateActive
+    ? screen.lines
+    : [...screen.scrollbackLines, ...screen.lines];
+
   return (
-    <div class={containerClass} ref={containerRef}>
-      {screen.lines.map((line, i) =>
+    <div
+      class={containerClass}
+      ref={containerRef}
+      style={{ fontSize: `${fontSize}px` }}
+    >
+      {/* Hidden measurement span for character cell size */}
+      <span
+        ref={measureRef}
+        style={{
+          position: "absolute",
+          visibility: "hidden",
+          whiteSpace: "pre",
+          fontFamily: "inherit",
+          fontSize: "inherit",
+          lineHeight: "inherit",
+        }}
+      >
+        X
+      </span>
+      {allLines.map((line, i) =>
         renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
       )}
       {disconnected && (

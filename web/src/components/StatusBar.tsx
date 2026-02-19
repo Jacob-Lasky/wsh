@@ -7,6 +7,10 @@ import {
   cycleTheme,
   sessions,
   sessionOrder,
+  zoomLevel,
+  zoomIn,
+  zoomOut,
+  resetZoom,
 } from "../state/sessions";
 import type { WshClient } from "../api/ws";
 
@@ -19,6 +23,7 @@ export function StatusBar({ client }: StatusBarProps) {
   const session = focusedSession.value;
   const mode = viewMode.value;
   const currentTheme = theme.value;
+  const zoom = zoomLevel.value;
   const toastRef = useRef<HTMLSpanElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -27,6 +32,25 @@ export function StatusBar({ client }: StatusBarProps) {
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
+  }, []);
+
+  // Zoom keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === "-") {
+        e.preventDefault();
+        zoomOut();
+      } else if (e.key === "0") {
+        e.preventDefault();
+        resetZoom();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const toggleOverview = () => {
@@ -100,6 +124,43 @@ export function StatusBar({ client }: StatusBarProps) {
                 />
               </svg>
             </button>
+            <span class="zoom-controls">
+              <button
+                class="status-btn"
+                onClick={zoomOut}
+                title="Zoom out (Ctrl+-)"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14">
+                  <path
+                    d="M3 7h8"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="status-btn zoom-level"
+                onClick={resetZoom}
+                title="Reset zoom (Ctrl+0)"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                class="status-btn"
+                onClick={zoomIn}
+                title="Zoom in (Ctrl+=)"
+              >
+                <svg width="14" height="14" viewBox="0 0 14 14">
+                  <path
+                    d="M7 3v8M3 7h8"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </button>
+            </span>
             <button
               class="status-btn"
               onClick={handleNewSession}

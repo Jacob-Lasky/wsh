@@ -242,12 +242,29 @@ To send binary data (e.g., Ctrl+C):
 
 **Result:** `{}`
 
+### `resize`
+
+Resize the terminal to the given dimensions. The server resizes the PTY, updates the parser, and emits a `reset` event to all subscribers.
+
+**Params:**
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `cols` | integer | New column count (clamped to min 1) |
+| `rows` | integer | New row count (clamped to min 1) |
+
+```json
+{"id": 5, "method": "resize", "params": {"cols": 120, "rows": 40}}
+```
+
+**Result:** `{}`
+
 ### `get_input_mode`
 
 Get the current input mode.
 
 ```json
-{"id": 5, "method": "get_input_mode"}
+{"id": 6, "method": "get_input_mode"}
 ```
 
 **Result:** `{"mode": "passthrough"}` or `{"mode": "capture"}`

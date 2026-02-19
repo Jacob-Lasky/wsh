@@ -220,6 +220,11 @@ async function setupSession(
     cols: screen.cols,
     rows: screen.rows,
     firstLineIndex: screen.first_line_index,
+    totalLines: screen.total_lines,
+    scrollbackLines: [],
+    scrollbackOffset: 0,
+    scrollbackComplete: false,
+    scrollbackLoading: false,
   });
 
   const unsub = client.subscribe(
@@ -343,6 +348,8 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
     case "diff": {
       const screen = raw.params?.screen ?? raw.screen;
       if (!screen) break;
+      // Preserve existing scrollback cache across sync/diff updates
+      const current = getScreen(session);
       setFullScreen(session, {
         lines: screen.lines,
         cursor: screen.cursor,
@@ -350,12 +357,20 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
         cols: screen.cols,
         rows: screen.rows,
         firstLineIndex: screen.first_line_index,
+        totalLines: screen.total_lines ?? current.totalLines,
+        scrollbackLines: current.scrollbackLines,
+        scrollbackOffset: current.scrollbackOffset,
+        scrollbackComplete: current.scrollbackComplete,
+        scrollbackLoading: current.scrollbackLoading,
       });
       break;
     }
 
     case "line":
       updateLine(session, raw.index, raw.line);
+      if (raw.total_lines !== undefined) {
+        updateScreen(session, { totalLines: raw.total_lines });
+      }
       break;
 
     case "cursor":
@@ -378,6 +393,11 @@ function handleEvent(client: WshClient, session: string, raw: any): void {
           cols: screen.cols,
           rows: screen.rows,
           firstLineIndex: screen.first_line_index,
+          totalLines: screen.total_lines,
+          scrollbackLines: [],
+          scrollbackOffset: 0,
+          scrollbackComplete: false,
+          scrollbackLoading: false,
         });
       }).catch((e) => {
         console.error(`Failed to re-fetch screen after reset for "${session}":`, e);

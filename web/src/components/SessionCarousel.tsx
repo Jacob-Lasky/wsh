@@ -10,6 +10,7 @@ interface SessionCarouselProps {
 
 export function SessionCarousel({ client }: SessionCarouselProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const programmaticScrollRef = useRef(false);
   const order = sessionOrder.value;
   const focused = focusedSession.value;
 
@@ -21,6 +22,7 @@ export function SessionCarousel({ client }: SessionCarouselProps) {
     const container = scrollRef.current;
     const target = idx * container.clientWidth;
     if (Math.abs(container.scrollLeft - target) > 1) {
+      programmaticScrollRef.current = true;
       container.scrollTo({ left: target, behavior: "smooth" });
     }
   }, [focused, order]);
@@ -31,6 +33,10 @@ export function SessionCarousel({ client }: SessionCarouselProps) {
     if (!container) return;
 
     const onScrollEnd = () => {
+      if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
+        return;
+      }
       if (!container.clientWidth) return;
       const idx = Math.round(container.scrollLeft / container.clientWidth);
       const session = order[idx];

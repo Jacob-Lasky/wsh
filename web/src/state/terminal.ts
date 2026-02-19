@@ -8,6 +8,16 @@ export interface ScreenState {
   cols: number;
   rows: number;
   firstLineIndex: number;
+  /** Total lines including scrollback (from server). */
+  totalLines: number;
+  /** Cached scrollback lines above the visible screen. */
+  scrollbackLines: FormattedLine[];
+  /** How far back we've loaded (offset into server scrollback). */
+  scrollbackOffset: number;
+  /** Whether all available scrollback has been fetched. */
+  scrollbackComplete: boolean;
+  /** Whether a scrollback fetch is currently in flight. */
+  scrollbackLoading: boolean;
 }
 
 function makeEmptyScreen(): ScreenState {
@@ -18,6 +28,11 @@ function makeEmptyScreen(): ScreenState {
     cols: 80,
     rows: 24,
     firstLineIndex: 0,
+    totalLines: 0,
+    scrollbackLines: [],
+    scrollbackOffset: 0,
+    scrollbackComplete: false,
+    scrollbackLoading: false,
   };
 }
 

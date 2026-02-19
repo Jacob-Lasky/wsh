@@ -134,10 +134,11 @@ For a different session, replace `default` with the session name:
     websocat ws://localhost:8080/sessions/build/ws/json
 
 You can also send requests over the WebSocket instead of
-HTTP — `get_screen`, `send_input`, `capture_input`,
-`release_input`, `focus`, `unfocus`, `get_focus`,
-`get_screen_mode`, `enter_alt_screen`, `exit_alt_screen`,
-etc. Same capabilities, persistent connection.
+HTTP — `get_screen`, `send_input`, `resize`,
+`capture_input`, `release_input`, `focus`, `unfocus`,
+`get_focus`, `get_screen_mode`, `enter_alt_screen`,
+`exit_alt_screen`, etc. Same capabilities, persistent
+connection.
 
 ## Visual Elements
 

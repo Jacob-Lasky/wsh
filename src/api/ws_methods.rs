@@ -171,6 +171,13 @@ fn default_scrollback_limit() -> usize {
     100
 }
 
+/// Parameters for the `resize` method.
+#[derive(Debug, Deserialize)]
+pub struct ResizeParams {
+    pub cols: u16,
+    pub rows: u16,
+}
+
 /// Parameters for the `send_input` method.
 #[derive(Debug, Deserialize)]
 pub struct SendInputParams {
@@ -617,6 +624,22 @@ pub async fn dispatch(req: &WsRequest, session: &Session) -> WsResponse {
                     "Input send timed out.",
                 ),
             }
+        }
+        "resize" => {
+            let params: ResizeParams = match parse_params(req) {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            let rows = params.rows.max(1);
+            let cols = params.cols.max(1);
+            if let Err(e) = session.pty.lock().resize(rows, cols) {
+                tracing::warn!(?e, "failed to resize PTY via WS");
+            }
+            if let Err(e) = session.parser.resize(cols as usize, rows as usize).await {
+                tracing::warn!(?e, "failed to resize parser via WS");
+            }
+            session.terminal_size.set(rows, cols);
+            WsResponse::success(id, method, serde_json::json!({}))
         }
         "list_panels" => {
             let mode = *session.screen_mode.read();
@@ -1362,6 +1385,42 @@ mod tests {
         let resp = dispatch(&req, &session).await;
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["error"]["code"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn dispatch_resize() {
+        let (session, _rx, _parser_tx) = create_test_session();
+        let req = WsRequest {
+            id: Some(json!(42)),
+            method: "resize".to_string(),
+            params: Some(json!({"cols": 120, "rows": 40})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+        assert!(json.get("error").is_none());
+
+        // Verify terminal_size was updated
+        let (rows, cols) = session.terminal_size.get();
+        assert_eq!(rows, 40);
+        assert_eq!(cols, 120);
+    }
+
+    #[tokio::test]
+    async fn dispatch_resize_clamps_to_min_1() {
+        let (session, _rx, _parser_tx) = create_test_session();
+        let req = WsRequest {
+            id: None,
+            method: "resize".to_string(),
+            params: Some(json!({"cols": 0, "rows": 0})),
+        };
+        let resp = dispatch(&req, &session).await;
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["result"].is_object());
+
+        let (rows, cols) = session.terminal_size.get();
+        assert_eq!(rows, 1);
+        assert_eq!(cols, 1);
     }
 
     #[tokio::test]

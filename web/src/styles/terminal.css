@@ -462,6 +462,19 @@ html, body, #app {
   border-color: var(--cursor-color);
 }
 
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.zoom-level {
+  font-size: 10px;
+  min-width: 36px;
+  text-align: center;
+  font-family: system-ui, sans-serif;
+}
+
 .overview-toggle {
   background: none;
   border: 1px solid #444;
