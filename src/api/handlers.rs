@@ -1820,13 +1820,26 @@ pub(super) struct QuiesceAnyQuery {
     /// responding, even if a session is already idle.
     #[serde(default)]
     fresh: bool,
+    /// Comma-separated list of tags (e.g. `?tag=build,test`).
+    /// When provided, only sessions matching all tags are considered.
+    #[serde(default)]
+    tag: Option<String>,
 }
 
 pub(super) async fn quiesce_any(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<QuiesceAnyQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let names = state.sessions.list();
+    let tags: Vec<String> = params
+        .tag
+        .as_deref()
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    let names = if tags.is_empty() {
+        state.sessions.list()
+    } else {
+        state.sessions.sessions_by_tags(&tags)
+    };
     if names.is_empty() {
         return Err(ApiError::NoSessions);
     }
