@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { groups, selectedGroups, sessionStatuses, type SessionStatus } from "../state/groups";
 import { connectionState } from "../state/sessions";
@@ -17,33 +17,21 @@ function StatusDot({ status }: { status: SessionStatus | undefined }) {
   return <span class={`mini-status-dot ${cls}`} />;
 }
 
-function formatTimeAgo(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
-}
-
 export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
   const allGroups = groups.value;
   const selected = selectedGroups.value;
   const connState = connectionState.value;
   const statuses = sessionStatuses.value;
 
-  // Periodic re-render for "Xm ago" timestamps (every 30s)
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(timer);
-  }, []);
-
   const handleGroupClick = useCallback((tag: string, e: MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
       const current = selectedGroups.value;
       if (current.includes(tag)) {
-        selectedGroups.value = current.filter((t) => t !== tag);
+        // Prevent deselecting the last group
+        const filtered = current.filter((t) => t !== tag);
+        if (filtered.length > 0) {
+          selectedGroups.value = filtered;
+        }
       } else {
         selectedGroups.value = [...current, tag];
       }
