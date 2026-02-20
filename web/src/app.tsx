@@ -26,6 +26,7 @@ import {
 import { LayoutShell } from "./components/LayoutShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPalette } from "./components/CommandPalette";
+import { ShortcutSheet } from "./components/ShortcutSheet";
 
 // Track unsubscribe functions for per-session subscriptions
 const unsubscribes = new Map<string, () => void>();
@@ -127,6 +128,7 @@ export function App() {
 
   // Command palette state
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
 
   // Keyboard shortcut: Super+K (or Ctrl+Shift+K fallback) to toggle command palette
   useEffect(() => {
@@ -138,6 +140,10 @@ export function App() {
       if (e.key === "k" || e.key === "K") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      }
+      if (e.key === "?") {
+        e.preventDefault();
+        setShortcutSheetOpen((v) => !v);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -172,6 +178,9 @@ export function App() {
       <LayoutShell client={client} />
       {paletteOpen && (
         <CommandPalette client={client} onClose={() => setPaletteOpen(false)} />
+      )}
+      {shortcutSheetOpen && (
+        <ShortcutSheet onClose={() => setShortcutSheetOpen(false)} />
       )}
     </ErrorBoundary>
   );
