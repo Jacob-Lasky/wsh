@@ -1183,27 +1183,28 @@ html, body, #app {
   padding: 8px 0;
 }
 
-/* Mini carousel */
+/* Mini carousel (film-strip) */
 .mini-carousel {
   display: flex;
   align-items: stretch;
   gap: 2px;
   min-height: 24px;
-}
-
-.mini-carousel-center {
-  flex: 3;
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 2px;
   overflow: hidden;
 }
 
-.mini-carousel-side {
+.mini-carousel-thumb {
   flex: 1;
+  min-width: 0;
   background: rgba(0, 0, 0, 0.15);
   border-radius: 2px;
   overflow: hidden;
   opacity: 0.5;
+}
+
+.mini-carousel-thumb.active {
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 1;
+  border: 1px solid var(--accent, #666);
 }
 
 /* Mini grid */
@@ -1548,91 +1549,104 @@ html, body, #app {
 .depth-carousel {
   width: 100%;
   height: 100%;
-  position: relative;
-  overflow: hidden;
-  perspective: 1200px;
-}
-
-.carousel-track {
   display: flex;
-  align-items: stretch;
-  justify-content: center;
-  height: 100%;
-  position: relative;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.carousel-slide {
+/* Film strip navigation bar */
+
+.carousel-strip-wrap {
+  position: relative;
+  flex-shrink: 0;
+  padding: 4px 0;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid var(--border, #333);
+}
+
+/* Fade indicators for overflow */
+.carousel-strip-wrap.overflow-left::before,
+.carousel-strip-wrap.overflow-right::after {
+  content: "";
   position: absolute;
   top: 0;
   bottom: 0;
-  transition: transform 0.4s ease, opacity 0.4s ease;
-  overflow: hidden;
-  border-radius: 8px;
+  width: 24px;
+  z-index: 2;
+  pointer-events: none;
 }
 
-.carousel-center {
-  position: relative;
-  width: 70%;
-  left: 15%;
-  z-index: 2;
-  transform: translateZ(0);
+.carousel-strip-wrap.overflow-left::before {
+  left: 0;
+  background: linear-gradient(to right, var(--bg, #1a1a2e), transparent);
+}
+
+.carousel-strip-wrap.overflow-right::after {
+  right: 0;
+  background: linear-gradient(to left, var(--bg, #1a1a2e), transparent);
+}
+
+.carousel-strip {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.carousel-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.carousel-thumb {
+  flex-shrink: 0;
+  width: 120px;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid transparent;
+  opacity: 0.5;
+  transition: opacity 0.2s, border-color 0.2s, transform 0.2s;
+}
+
+.carousel-thumb:hover {
+  opacity: 0.8;
+}
+
+.carousel-thumb.active {
+  opacity: 1;
+  border-color: var(--accent, #666);
+  transform: scale(1.05);
+}
+
+.carousel-thumb-label {
+  font-size: 8px;
+  color: var(--fg, #ccc);
+  padding: 1px 4px 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.6;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.carousel-thumb.active .carousel-thumb-label {
   opacity: 1;
 }
 
-/* Single session: fill the entire track */
-.carousel-track > .carousel-slide:only-child {
-  width: 100%;
-  left: 0;
-}
+/* Active session — full remaining height */
 
-.carousel-prev {
-  width: 55%;
-  left: -5%;
-  z-index: 1;
-  transform: perspective(1200px) translateZ(-100px) rotateY(3deg);
-  opacity: 0.5;
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.carousel-prev > * {
-  pointer-events: none;
-}
-
-.carousel-next {
-  width: 55%;
-  right: -5%;
-  left: auto;
-  z-index: 1;
-  transform: perspective(1200px) translateZ(-100px) rotateY(-3deg);
-  opacity: 0.5;
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.carousel-next > * {
-  pointer-events: none;
-}
-
-.carousel-prev:hover,
-.carousel-next:hover {
-  opacity: 0.7;
-}
-
-.carousel-focus-ring {
-  position: absolute;
-  inset: -1px;
-  border-radius: 8px;
-  border: 1px solid var(--accent, #666);
-  opacity: 0.4;
-  pointer-events: none;
+.carousel-main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Mobile carousel */
 
-.depth-carousel.mobile .carousel-center {
-  width: 100%;
-  left: 0;
+.depth-carousel.mobile .carousel-main {
+  flex: 1;
 }
 
 .carousel-nav-hints {
@@ -2079,8 +2093,7 @@ html, body, #app {
 .tile-select-circle:focus-visible,
 .tile-action-btn:focus-visible,
 .thumbnail-close:focus-visible,
-.carousel-prev:focus-visible,
-.carousel-next:focus-visible,
+.carousel-thumb:focus-visible,
 .page-dot:focus-visible,
 .auth-prompt-btn:focus-visible,
 .auth-prompt-clear:focus-visible,
@@ -2109,8 +2122,8 @@ html, body, #app {
     transition-duration: 0.01s !important;
   }
 
-  /* Disable carousel 3D transitions */
-  .carousel-slide {
+  /* Disable carousel transitions */
+  .carousel-thumb {
     transition: none !important;
   }
 

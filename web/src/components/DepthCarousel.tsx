@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { focusedSession } from "../state/sessions";
+import { MiniTermContent } from "./MiniViewPreview";
 import { SessionPane } from "./SessionPane";
 
 interface DepthCarouselProps {
@@ -10,9 +11,9 @@ interface DepthCarouselProps {
 
 export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
   const focused = focusedSession.value;
-  // Find the index of the focused session, or default to 0
   const currentIndex = Math.max(0, sessions.indexOf(focused ?? ""));
   const [isMobile, setIsMobile] = useState(false);
+  const stripRef = useRef<HTMLDivElement>(null);
 
   // Detect mobile viewport
   useEffect(() => {
@@ -46,16 +47,51 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [navigate]);
 
+  // Scroll the film strip to center the active thumb
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const activeThumb = strip.children[currentIndex] as HTMLElement | undefined;
+    if (activeThumb) {
+      const stripRect = strip.getBoundingClientRect();
+      const thumbRect = activeThumb.getBoundingClientRect();
+      const scrollLeft = activeThumb.offsetLeft - (stripRect.width / 2) + (thumbRect.width / 2);
+      strip.scrollTo({ left: scrollLeft, behavior: "smooth" });
+    }
+  }, [currentIndex]);
+
+  // Check if strip overflows (for fade indicators)
+  const [overflowLeft, setOverflowLeft] = useState(false);
+  const [overflowRight, setOverflowRight] = useState(false);
+
+  const updateOverflow = useCallback(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    setOverflowLeft(strip.scrollLeft > 4);
+    setOverflowRight(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    updateOverflow();
+    strip.addEventListener("scroll", updateOverflow, { passive: true });
+    const ro = new ResizeObserver(updateOverflow);
+    ro.observe(strip);
+    return () => {
+      strip.removeEventListener("scroll", updateOverflow);
+      ro.disconnect();
+    };
+  }, [updateOverflow, sessions.length]);
+
   if (sessions.length === 0) return null;
 
-  // Single session -- just show it full-size
+  // Single session — no strip needed
   if (sessions.length === 1) {
     return (
       <div class="depth-carousel">
-        <div class="carousel-track">
-          <div class="carousel-slide carousel-center">
-            <SessionPane session={sessions[0]} client={client} />
-          </div>
+        <div class="carousel-main">
+          <SessionPane session={sessions[0]} client={client} />
         </div>
       </div>
     );
@@ -65,58 +101,37 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
   if (isMobile) {
     return (
       <div class="depth-carousel mobile">
-        <div class="carousel-track">
-          <div class="carousel-slide carousel-center">
-            <SessionPane session={sessions[currentIndex]} client={client} />
-          </div>
+        <div class="carousel-main">
+          <SessionPane session={sessions[currentIndex]} client={client} />
         </div>
-        {sessions.length > 1 && (
-          <div class="carousel-nav-hints">
-            <button class="carousel-nav-btn" onClick={() => navigate(-1)}>&#9664;</button>
-            <span class="carousel-position">{currentIndex + 1} / {sessions.length}</span>
-            <button class="carousel-nav-btn" onClick={() => navigate(1)}>&#9654;</button>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Desktop: 3D depth effect
-  const prevIndex = (currentIndex - 1 + sessions.length) % sessions.length;
-  const nextIndex = (currentIndex + 1) % sessions.length;
-
-  // 2-session case: only show center + one adjacent to avoid ghost overlap
-  if (sessions.length === 2) {
-    const otherIndex = currentIndex === 0 ? 1 : 0;
-    return (
-      <div class="depth-carousel">
-        <div class="carousel-track">
-          <div key={sessions[otherIndex]} class="carousel-slide carousel-prev" onClick={() => navigate(-1)}>
-            <SessionPane session={sessions[otherIndex]} client={client} />
-          </div>
-          <div key={sessions[currentIndex]} class="carousel-slide carousel-center">
-            <SessionPane session={sessions[currentIndex]} client={client} />
-            <div class="carousel-focus-ring" />
-          </div>
+        <div class="carousel-nav-hints">
+          <button class="carousel-nav-btn" onClick={() => navigate(-1)}>&#9664;</button>
+          <span class="carousel-position">{currentIndex + 1} / {sessions.length}</span>
+          <button class="carousel-nav-btn" onClick={() => navigate(1)}>&#9654;</button>
         </div>
       </div>
     );
   }
 
-  // 3+ sessions: full 3D depth with prev + center + next
+  // Desktop: film strip + full-width active session
   return (
     <div class="depth-carousel">
-      <div class="carousel-track">
-        <div key={sessions[prevIndex]} class="carousel-slide carousel-prev" onClick={() => navigate(-1)}>
-          <SessionPane session={sessions[prevIndex]} client={client} />
+      <div class={`carousel-strip-wrap ${overflowLeft ? "overflow-left" : ""} ${overflowRight ? "overflow-right" : ""}`}>
+        <div class="carousel-strip" ref={stripRef}>
+          {sessions.map((s, i) => (
+            <div
+              key={s}
+              class={`carousel-thumb ${i === currentIndex ? "active" : ""}`}
+              onClick={() => { focusedSession.value = s; }}
+            >
+              <MiniTermContent session={s} maxLines={4} />
+              <div class="carousel-thumb-label">{s}</div>
+            </div>
+          ))}
         </div>
-        <div key={sessions[currentIndex]} class="carousel-slide carousel-center">
-          <SessionPane session={sessions[currentIndex]} client={client} />
-          <div class="carousel-focus-ring" />
-        </div>
-        <div key={sessions[nextIndex]} class="carousel-slide carousel-next" onClick={() => navigate(1)}>
-          <SessionPane session={sessions[nextIndex]} client={client} />
-        </div>
+      </div>
+      <div class="carousel-main">
+        <SessionPane session={sessions[currentIndex]} client={client} />
       </div>
     </div>
   );

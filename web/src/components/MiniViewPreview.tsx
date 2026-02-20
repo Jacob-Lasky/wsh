@@ -29,45 +29,18 @@ export function MiniTermContent({ session, maxLines = 6 }: { session: string; ma
   );
 }
 
-/** Mini carousel layout: center session with flanking panels. */
+/** Mini carousel layout: film-strip row of thumbnails with active highlighted. */
 function MiniCarousel({ sessions }: { sessions: string[] }) {
   const focused = focusedSession.value;
   const idx = Math.max(0, sessions.indexOf(focused ?? ""));
-  const center = sessions[idx];
-
-  if (sessions.length === 1) {
-    return (
-      <div class="mini-carousel">
-        <div class="mini-carousel-center">
-          <MiniTermContent session={center} maxLines={4} />
-        </div>
-      </div>
-    );
-  }
-
-  const prevIdx = (idx - 1 + sessions.length) % sessions.length;
-  const nextIdx = (idx + 1) % sessions.length;
 
   return (
     <div class="mini-carousel">
-      {sessions.length > 2 && (
-        <div class="mini-carousel-side mini-carousel-prev">
-          <MiniTermContent session={sessions[prevIdx]} maxLines={3} />
+      {sessions.map((s, i) => (
+        <div key={s} class={`mini-carousel-thumb ${i === idx ? "active" : ""}`}>
+          <MiniTermContent session={s} maxLines={3} />
         </div>
-      )}
-      {sessions.length === 2 && (
-        <div class="mini-carousel-side mini-carousel-prev">
-          <MiniTermContent session={sessions[prevIdx]} maxLines={3} />
-        </div>
-      )}
-      <div class="mini-carousel-center">
-        <MiniTermContent session={center} maxLines={4} />
-      </div>
-      {sessions.length > 2 && (
-        <div class="mini-carousel-side mini-carousel-next">
-          <MiniTermContent session={sessions[nextIdx]} maxLines={3} />
-        </div>
-      )}
+      ))}
     </div>
   );
 }
