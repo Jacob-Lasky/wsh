@@ -1,6 +1,7 @@
 import type { WshClient } from "../api/ws";
 import { selectedGroups, getViewModeForGroup, activeGroupSessions } from "../state/groups";
 import { focusedSession } from "../state/sessions";
+import { DepthCarousel } from "./DepthCarousel";
 import { SessionPane } from "./SessionPane";
 
 interface MainContentProps {
@@ -14,15 +15,13 @@ export function MainContent({ client }: MainContentProps) {
   const sessions = activeGroupSessions.value;
   const focused = focusedSession.value;
 
-  // For now, show the focused session as a single SessionPane
-  // Later tasks will add carousel, tiled, and queue views
-  const displaySession = focused && sessions.includes(focused) ? focused : sessions[0];
+  const groupLabel = primaryTag === "all" ? "All Sessions" : primaryTag;
 
-  if (!displaySession) {
+  if (sessions.length === 0) {
     return (
       <div class="main-content">
         <div class="main-header">
-          <span class="main-group-name">{primaryTag === "all" ? "All Sessions" : primaryTag}</span>
+          <span class="main-group-name">{groupLabel}</span>
         </div>
         <div class="main-body main-empty">
           No sessions
@@ -31,14 +30,31 @@ export function MainContent({ client }: MainContentProps) {
     );
   }
 
+  // Default/carousel mode
+  if (mode === "carousel") {
+    return (
+      <div class="main-content">
+        <div class="main-header">
+          <span class="main-group-name">{groupLabel}</span>
+          <span class="main-session-count">{sessions.length} sessions</span>
+        </div>
+        <div class="main-body">
+          <DepthCarousel sessions={sessions} client={client} />
+        </div>
+      </div>
+    );
+  }
+
+  // Placeholder for tiled and queue modes (coming in Tasks 9 and 10)
+  const displaySession = focused && sessions.includes(focused) ? focused : sessions[0];
   return (
     <div class="main-content">
       <div class="main-header">
-        <span class="main-group-name">{primaryTag === "all" ? "All Sessions" : primaryTag}</span>
+        <span class="main-group-name">{groupLabel}</span>
         <span class="main-session-count">{sessions.length} sessions</span>
       </div>
       <div class="main-body">
-        <SessionPane session={displaySession} client={client} />
+        {displaySession && <SessionPane session={displaySession} client={client} />}
       </div>
     </div>
   );
