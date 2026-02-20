@@ -1322,7 +1322,7 @@ html, body, #app {
 .mini-term-line {
   overflow: hidden;
   text-overflow: clip;
-  white-space: nowrap;
+  white-space: pre;
 }
 
 .mini-view-empty {
@@ -1343,6 +1343,7 @@ html, body, #app {
 
 .thumb-cell {
   position: relative;
+  height: 80px;
   border-radius: 4px;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.25);
