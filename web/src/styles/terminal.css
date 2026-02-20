@@ -1942,28 +1942,6 @@ html, body, #app {
   min-height: 0;
 }
 
-.queue-dismiss-bar {
-  display: flex;
-  justify-content: center;
-  padding: 6px;
-  flex-shrink: 0;
-}
-
-.queue-dismiss-btn {
-  background: var(--accent, #4ade80);
-  color: var(--bg, #000);
-  border: none;
-  border-radius: 6px;
-  padding: 6px 20px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.15s;
-}
-
-.queue-dismiss-btn:hover {
-  opacity: 0.85;
-}
 
 .queue-empty {
   flex: 1;
@@ -2262,7 +2240,6 @@ html, body, #app {
 .sidebar-icon:focus-visible,
 .view-mode-btn:focus-visible,
 .carousel-nav-btn:focus-visible,
-.queue-dismiss-btn:focus-visible,
 .queue-thumb:focus-visible,
 .tag-editor-suggestion:focus-visible,
 .tag-editor-remove:focus-visible,

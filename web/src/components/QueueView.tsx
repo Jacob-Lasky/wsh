@@ -137,11 +137,6 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
       {currentSession ? (
         <div class="queue-center">
           <SessionPane session={currentSession} client={client} />
-          <div class="queue-dismiss-bar">
-            <button class="queue-dismiss-btn" onClick={handleDismiss} title="Dismiss (Ctrl+Shift+Enter)">
-              &#10003; Done
-            </button>
-          </div>
         </div>
       ) : (
         <div class="queue-empty">
