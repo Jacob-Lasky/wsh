@@ -1,6 +1,7 @@
+import { useEffect } from "preact/hooks";
 import type { WshClient } from "../api/ws";
-import { selectedGroups, getViewModeForGroup, activeGroupSessions } from "../state/groups";
-import { focusedSession } from "../state/sessions";
+import { selectedGroups, getViewModeForGroup, setViewModeForGroup, activeGroupSessions } from "../state/groups";
+import { focusedSession, type ViewMode } from "../state/sessions";
 import { AutoGrid } from "./AutoGrid";
 import { DepthCarousel } from "./DepthCarousel";
 import { QueueView } from "./QueueView";
@@ -8,6 +9,34 @@ import { SessionPane } from "./SessionPane";
 
 interface MainContentProps {
   client: WshClient;
+}
+
+function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }) {
+  return (
+    <div class="view-mode-toggle">
+      <button
+        class={`view-mode-btn ${mode === "carousel" ? "active" : ""}`}
+        onClick={() => setViewModeForGroup(groupTag, "carousel")}
+        title="Carousel (Super+F)"
+      >
+        &#9655;
+      </button>
+      <button
+        class={`view-mode-btn ${mode === "tiled" ? "active" : ""}`}
+        onClick={() => setViewModeForGroup(groupTag, "tiled")}
+        title="Tiled (Super+G)"
+      >
+        &#9638;
+      </button>
+      <button
+        class={`view-mode-btn ${mode === "queue" ? "active" : ""}`}
+        onClick={() => setViewModeForGroup(groupTag, "queue")}
+        title="Queue (Super+Q)"
+      >
+        &#9776;
+      </button>
+    </div>
+  );
 }
 
 export function MainContent({ client }: MainContentProps) {
@@ -19,11 +48,36 @@ export function MainContent({ client }: MainContentProps) {
 
   const groupLabel = primaryTag === "all" ? "All Sessions" : primaryTag;
 
+  // Keyboard shortcuts for view mode switching
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const superKey = e.metaKey;
+      const fallback = e.ctrlKey && e.shiftKey;
+      if (!superKey && !fallback) return;
+
+      const tag = selectedGroups.value[0] || "all";
+      if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        setViewModeForGroup(tag, "carousel");
+      } else if (e.key === "g" || e.key === "G") {
+        e.preventDefault();
+        setViewModeForGroup(tag, "tiled");
+      } else if (e.key === "q" || e.key === "Q") {
+        e.preventDefault();
+        setViewModeForGroup(tag, "queue");
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   if (sessions.length === 0) {
     return (
       <div class="main-content">
         <div class="main-header">
           <span class="main-group-name">{groupLabel}</span>
+          <div style={{ flex: 1 }} />
+          <ViewModeToggle mode={mode} groupTag={primaryTag} />
         </div>
         <div class="main-body main-empty">
           No sessions
@@ -32,14 +86,19 @@ export function MainContent({ client }: MainContentProps) {
     );
   }
 
-  // Default/carousel mode
+  const header = (
+    <div class="main-header">
+      <span class="main-group-name">{groupLabel}</span>
+      <span class="main-session-count">{sessions.length} sessions</span>
+      <div style={{ flex: 1 }} />
+      <ViewModeToggle mode={mode} groupTag={primaryTag} />
+    </div>
+  );
+
   if (mode === "carousel") {
     return (
       <div class="main-content">
-        <div class="main-header">
-          <span class="main-group-name">{groupLabel}</span>
-          <span class="main-session-count">{sessions.length} sessions</span>
-        </div>
+        {header}
         <div class="main-body">
           <DepthCarousel sessions={sessions} client={client} />
         </div>
@@ -50,10 +109,7 @@ export function MainContent({ client }: MainContentProps) {
   if (mode === "tiled") {
     return (
       <div class="main-content">
-        <div class="main-header">
-          <span class="main-group-name">{groupLabel}</span>
-          <span class="main-session-count">{sessions.length} sessions</span>
-        </div>
+        {header}
         <div class="main-body">
           <AutoGrid sessions={sessions} client={client} />
         </div>
@@ -61,14 +117,10 @@ export function MainContent({ client }: MainContentProps) {
     );
   }
 
-  // Queue mode
   if (mode === "queue") {
     return (
       <div class="main-content">
-        <div class="main-header">
-          <span class="main-group-name">{groupLabel}</span>
-          <span class="main-session-count">{sessions.length} sessions</span>
-        </div>
+        {header}
         <div class="main-body">
           <QueueView sessions={sessions} groupTag={primaryTag} client={client} />
         </div>
@@ -80,10 +132,7 @@ export function MainContent({ client }: MainContentProps) {
   const displaySession = focused && sessions.includes(focused) ? focused : sessions[0];
   return (
     <div class="main-content">
-      <div class="main-header">
-        <span class="main-group-name">{groupLabel}</span>
-        <span class="main-session-count">{sessions.length} sessions</span>
-      </div>
+      {header}
       <div class="main-body">
         {displaySession && <SessionPane session={displaySession} client={client} />}
       </div>

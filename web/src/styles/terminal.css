@@ -1201,6 +1201,39 @@ html, body, #app {
   font-size: 14px;
 }
 
+/* View Mode Toggle */
+
+.view-mode-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.view-mode-btn {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 3px;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.view-mode-btn:hover {
+  opacity: 0.7;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.view-mode-btn.active {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* ======================================================================
    Tag Editor
    ====================================================================== */
