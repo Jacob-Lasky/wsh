@@ -14,36 +14,34 @@ const CATEGORIES: ShortcutCategory[] = [
   {
     label: "Navigation",
     shortcuts: [
-      { keys: "Super+Left/Right", description: "Carousel rotate" },
-      { keys: "Super+1-9", description: "Jump to Nth session" },
-      { keys: "Super+Tab", description: "Next sidebar group" },
-      { keys: "Super+Shift+Tab", description: "Previous sidebar group" },
-      { keys: "Super+Arrow keys", description: "Move focus between tiles" },
+      { keys: "Ctrl+Shift+Left/Right", description: "Carousel rotate / Grid navigate" },
+      { keys: "Ctrl+Shift+Up/Down", description: "Grid navigate rows" },
+      { keys: "Ctrl+Shift+1-9", description: "Jump to Nth session" },
+      { keys: "Ctrl+Shift+Tab", description: "Next sidebar group" },
     ],
   },
   {
     label: "View Modes",
     shortcuts: [
-      { keys: "Super+F", description: "Carousel mode" },
-      { keys: "Super+G", description: "Tiled mode" },
-      { keys: "Super+Q", description: "Queue mode" },
+      { keys: "Ctrl+Shift+F", description: "Carousel mode" },
+      { keys: "Ctrl+Shift+G", description: "Tiled mode" },
+      { keys: "Ctrl+Shift+Q", description: "Queue mode" },
     ],
   },
   {
     label: "Session Management",
     shortcuts: [
-      { keys: "Super+N", description: "New session" },
-      { keys: "Super+W", description: "Kill focused session" },
-      { keys: "Super+Enter", description: "Dismiss queue item" },
+      { keys: "Ctrl+Shift+O", description: "New session" },
+      { keys: "Ctrl+Shift+W", description: "Kill focused session" },
+      { keys: "Ctrl+Shift+Enter", description: "Dismiss queue item" },
     ],
   },
   {
     label: "UI",
     shortcuts: [
-      { keys: "Super+B", description: "Toggle sidebar" },
-      { keys: "Super+T", description: "Theme picker" },
-      { keys: "Super+K", description: "Command palette" },
-      { keys: "Super+?", description: "This help" },
+      { keys: "Ctrl+Shift+B", description: "Toggle sidebar" },
+      { keys: "Ctrl+Shift+K", description: "Command palette" },
+      { keys: "Ctrl+Shift+/", description: "This help" },
     ],
   },
 ];
@@ -111,7 +109,7 @@ export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
           )}
         </div>
         <div class="shortcut-footer">
-          Tip: Super = Cmd on Mac, Win on Windows. Fallback: Ctrl+Shift
+          All shortcuts use Ctrl+Shift as the modifier.
         </div>
       </div>
     </div>

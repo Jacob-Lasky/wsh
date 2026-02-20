@@ -28,12 +28,11 @@ export function DepthCarousel({ sessions, client }: DepthCarouselProps) {
     focusedSession.value = sessions[newIndex];
   }, [currentIndex, sessions]);
 
-  // Keyboard navigation: Super+Left/Right or Ctrl+Shift+Left/Right
+  // Keyboard navigation: Ctrl+Shift+Left/Right
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const superKey = e.metaKey;
-      const fallback = e.ctrlKey && e.shiftKey;
-      if (!superKey && !fallback) return;
+      if (!e.ctrlKey || !e.shiftKey) return;
+      if (e.altKey || e.metaKey) return;
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();

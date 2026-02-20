@@ -17,7 +17,7 @@ function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }
       <button
         class={`view-mode-btn ${mode === "carousel" ? "active" : ""}`}
         onClick={() => setViewModeForGroup(groupTag, "carousel")}
-        title="Carousel (Super+F)"
+        title="Carousel (Ctrl+Shift+F)"
         role="radio"
         aria-checked={mode === "carousel"}
       >
@@ -26,7 +26,7 @@ function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }
       <button
         class={`view-mode-btn ${mode === "tiled" ? "active" : ""}`}
         onClick={() => setViewModeForGroup(groupTag, "tiled")}
-        title="Tiled (Super+G)"
+        title="Tiled (Ctrl+Shift+G)"
         role="radio"
         aria-checked={mode === "tiled"}
       >
@@ -35,7 +35,7 @@ function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }
       <button
         class={`view-mode-btn ${mode === "queue" ? "active" : ""}`}
         onClick={() => setViewModeForGroup(groupTag, "queue")}
-        title="Queue (Super+Q)"
+        title="Queue (Ctrl+Shift+Q)"
         role="radio"
         aria-checked={mode === "queue"}
       >
@@ -57,9 +57,8 @@ export function MainContent({ client }: MainContentProps) {
   // Keyboard shortcuts for view mode switching
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const superKey = e.metaKey;
-      const fallback = e.ctrlKey && e.shiftKey;
-      if (!superKey && !fallback) return;
+      if (!e.ctrlKey || !e.shiftKey) return;
+      if (e.altKey || e.metaKey) return;
 
       const tag = selectedGroups.value[0] || "all";
       if (e.key === "f" || e.key === "F") {

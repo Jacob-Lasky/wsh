@@ -129,12 +129,11 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
 
-  // Global keyboard shortcuts: Super+X or Ctrl+Shift+X
+  // Global keyboard shortcuts: Ctrl+Shift+X
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const superKey = e.metaKey;
-      const fallback = e.ctrlKey && e.shiftKey;
-      if (!superKey && !fallback) return;
+      if (!e.ctrlKey || !e.shiftKey) return;
+      if (e.altKey || e.metaKey) return;
 
       const key = e.key;
 
@@ -145,7 +144,7 @@ export function App() {
         return;
       }
       // Shortcut help
-      if (key === "?") {
+      if (key === "/" || key === "?") {
         e.preventDefault();
         setShortcutSheetOpen((v) => !v);
         return;
@@ -158,7 +157,7 @@ export function App() {
         return;
       }
       // New session
-      if (key === "n" || key === "N") {
+      if (key === "o" || key === "O") {
         e.preventDefault();
         clientRef.current?.createSession().catch(() => {});
         return;
@@ -172,7 +171,7 @@ export function App() {
         }
         return;
       }
-      // Jump to Nth session (Super+1-9)
+      // Jump to Nth session (Ctrl+Shift+1-9)
       if (key >= "1" && key <= "9") {
         e.preventDefault();
         const idx = parseInt(key) - 1;
@@ -189,7 +188,7 @@ export function App() {
         if (allGroups.length === 0) return;
         const current = selectedGroups.value[0] || "all";
         const currentIdx = allGroups.findIndex((g) => g.tag === current);
-        const direction = e.shiftKey ? -1 : 1;
+        const direction = 1;
         const nextIdx = (currentIdx + direction + allGroups.length) % allGroups.length;
         selectedGroups.value = [allGroups[nextIdx].tag];
         return;

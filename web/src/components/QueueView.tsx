@@ -78,10 +78,10 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
     // (it will be picked up by the effect above on re-render)
   }, [groupTag, currentSession]);
 
-  // Super+Enter to dismiss
+  // Ctrl+Shift+Enter to dismiss
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || (e.ctrlKey && e.shiftKey)) && e.key === "Enter") {
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === "Enter") {
         e.preventDefault();
         handleDismiss();
       }
@@ -130,7 +130,7 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
         <div class="queue-center">
           <SessionPane session={currentSession} client={client} />
           <div class="queue-dismiss-bar">
-            <button class="queue-dismiss-btn" onClick={handleDismiss} title="Dismiss (Super+Enter)">
+            <button class="queue-dismiss-btn" onClick={handleDismiss} title="Dismiss (Ctrl+Shift+Enter)">
               &#10003; Done
             </button>
           </div>
