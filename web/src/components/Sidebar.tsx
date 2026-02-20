@@ -1,5 +1,6 @@
 import { useCallback, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
+import { dragState, dropTargetTag, startSessionDrag, handleGroupDragOver, handleGroupDragLeave, handleGroupDrop, endDrag } from "../hooks/useDragDrop";
 import { groups, selectedGroups, sessionStatuses, type SessionStatus } from "../state/groups";
 import { connectionState } from "../state/sessions";
 import { MiniTerminal } from "./MiniTerminal";
@@ -24,6 +25,8 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
   const selected = selectedGroups.value;
   const connState = connectionState.value;
   const statuses = sessionStatuses.value;
+  const _dragState = dragState.value;
+  const dropTarget = dropTargetTag.value;
   const [editingSession, setEditingSession] = useState<string | null>(null);
 
   const handleGroupClick = useCallback((tag: string, e: MouseEvent) => {
@@ -87,8 +90,11 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
         {allGroups.map((g) => (
           <div
             key={g.tag}
-            class={`sidebar-group ${selected.includes(g.tag) ? "selected" : ""}`}
+            class={`sidebar-group ${selected.includes(g.tag) ? "selected" : ""} ${dropTarget === g.tag ? "drop-target" : ""}`}
             onClick={(e: MouseEvent) => handleGroupClick(g.tag, e)}
+            onDragOver={(e: DragEvent) => handleGroupDragOver(g.tag, e)}
+            onDragLeave={handleGroupDragLeave}
+            onDrop={(e: DragEvent) => handleGroupDrop(g.tag, e, client)}
           >
             <div class="sidebar-group-header">
               <span class="sidebar-group-label">{g.label}</span>
@@ -99,7 +105,13 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
             {g.sessions.length > 0 && (
               <div class="sidebar-preview-grid">
                 {g.sessions.slice(0, 4).map((s) => (
-                  <div key={s} class="sidebar-preview-cell">
+                  <div
+                    key={s}
+                    class="sidebar-preview-cell"
+                    draggable
+                    onDragStart={(e: DragEvent) => startSessionDrag(s, e)}
+                    onDragEnd={endDrag}
+                  >
                     <MiniTerminal session={s} />
                     <StatusDot status={statuses.get(s)} />
                     <button

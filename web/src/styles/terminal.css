@@ -1143,6 +1143,22 @@ html, body, #app {
   background: #6b7280;
 }
 
+/* Drag and Drop */
+
+.sidebar-group.drop-target {
+  background: rgba(255, 255, 255, 0.08);
+  border-left-color: var(--accent, #666);
+  box-shadow: inset 0 0 0 1px var(--accent, #666);
+}
+
+.sidebar-preview-cell[draggable="true"] {
+  cursor: grab;
+}
+
+.sidebar-preview-cell[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 /* Group timestamp */
 
 .sidebar-group-timestamp {
