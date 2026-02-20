@@ -1604,14 +1604,15 @@ html, body, #app {
   border-radius: 4px;
   overflow: hidden;
   cursor: pointer;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid transparent;
-  opacity: 0.5;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  opacity: 0.7;
   transition: opacity 0.2s, border-color 0.2s, transform 0.2s;
 }
 
 .carousel-thumb:hover {
-  opacity: 0.8;
+  opacity: 0.9;
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
 .carousel-thumb.active {
@@ -1918,6 +1919,7 @@ html, body, #app {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
 }
 
 .palette-item-label {
@@ -1932,6 +1934,23 @@ html, body, #app {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.palette-shortcut {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+  white-space: nowrap;
+}
+
+.palette-item.selected .palette-shortcut {
+  opacity: 0.7;
 }
 
 /* ======================================================================

@@ -7,6 +7,7 @@ interface PaletteItem {
   type: "session" | "group" | "action";
   label: string;
   description?: string;
+  shortcut?: string;
   action: () => void;
 }
 
@@ -86,12 +87,14 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
       type: "action",
       label: "New Session",
       description: "Create a new terminal session",
+      shortcut: "Ctrl+Shift+O",
       action: () => { client.createSession().catch(() => {}); onClose(); },
     });
 
     result.push({
       type: "action",
       label: "Toggle Sidebar",
+      shortcut: "Ctrl+Shift+B",
       action: () => { sidebarCollapsed.value = !sidebarCollapsed.value; onClose(); },
     });
 
@@ -113,14 +116,15 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
     }
 
     const modes = [
-      { mode: "carousel" as const, label: "Carousel View" },
-      { mode: "tiled" as const, label: "Tiled View" },
-      { mode: "queue" as const, label: "Queue View" },
+      { mode: "carousel" as const, label: "Carousel View", shortcut: "Ctrl+Shift+F" },
+      { mode: "tiled" as const, label: "Tiled View", shortcut: "Ctrl+Shift+G" },
+      { mode: "queue" as const, label: "Queue View", shortcut: "Ctrl+Shift+Q" },
     ];
     for (const m of modes) {
       result.push({
         type: "action",
         label: m.label,
+        shortcut: m.shortcut,
         action: () => {
           const tag = selectedGroups.value[0] || "all";
           setViewModeForGroup(tag, m.mode);
@@ -171,7 +175,11 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
 
   // Keyboard navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    } else if (e.key === "ArrowDown") {
       e.preventDefault();
       setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
     } else if (e.key === "ArrowUp") {
@@ -182,7 +190,7 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
       const item = filtered[selectedIndex];
       if (item) item.action();
     }
-  }, [filtered, selectedIndex]);
+  }, [filtered, selectedIndex, onClose]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -227,6 +235,9 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
                   <span class="palette-item-desc">{item.description}</span>
                 )}
               </div>
+              {item.shortcut && (
+                <kbd class="palette-shortcut">{item.shortcut}</kbd>
+              )}
             </div>
           ))}
         </div>
