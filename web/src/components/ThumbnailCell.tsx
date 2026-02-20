@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { sessionStatuses, type SessionStatus } from "../state/groups";
 import { focusedSession } from "../state/sessions";
+import { getScreenSignal } from "../state/terminal";
 import { startSessionDrag, endDrag } from "../hooks/useDragDrop";
 import { MiniTermContent } from "./MiniViewPreview";
 import { TagEditor } from "./TagEditor";
@@ -18,6 +19,10 @@ function statusLabel(status: SessionStatus | undefined): string {
 export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   const status = sessionStatuses.value.get(session);
   const dotClass = status === "quiescent" ? "status-dot-green" : "status-dot-amber";
+  const screen = getScreenSignal(session).value;
+  // Monospace char is ~0.6× font-size wide, row is lineHeight × font-size tall.
+  // aspect-ratio = (cols × charWidth) / (rows × rowHeight) = cols / (rows × 2)
+  const aspectRatio = screen.cols / (screen.rows * 2);
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session);
@@ -63,6 +68,7 @@ export function ThumbnailCell({ session, client }: ThumbnailCellProps) {
   return (
     <div
       class={`thumb-cell ${focusedSession.value === session ? "focused" : ""}`}
+      style={{ aspectRatio: `${aspectRatio}` }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); if (!showTagEditor) setRenaming(false); }}
       onClick={handleThumbClick}

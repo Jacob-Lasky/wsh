@@ -1343,7 +1343,6 @@ html, body, #app {
 
 .thumb-cell {
   position: relative;
-  aspect-ratio: 4 / 3;
   border-radius: 4px;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.25);
