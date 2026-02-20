@@ -1629,3 +1629,119 @@ html, body, #app {
   font-size: 14px;
   color: var(--fg, #ccc);
 }
+
+/* ======================================================================
+   Command Palette
+   ====================================================================== */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+}
+
+.palette {
+  width: min(520px, 90vw);
+  background: var(--chrome, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border, #333);
+  color: var(--fg, #ccc);
+  font-size: 15px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.palette-input::placeholder {
+  color: var(--fg, #ccc);
+  opacity: 0.3;
+}
+
+.palette-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.palette-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--fg, #ccc);
+  opacity: 0.3;
+  font-size: 13px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.palette-item.selected {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.palette-type-badge {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.palette-type-session {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+}
+
+.palette-type-group {
+  background: rgba(96, 165, 250, 0.15);
+  color: #60a5fa;
+}
+
+.palette-type-action {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+}
+
+.palette-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.palette-item-label {
+  font-size: 13px;
+  color: var(--fg, #ccc);
+}
+
+.palette-item-desc {
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  opacity: 0.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

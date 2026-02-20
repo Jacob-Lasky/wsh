@@ -1,0 +1,216 @@
+import { useState, useRef, useEffect, useCallback, useMemo } from "preact/hooks";
+import { sessions, focusedSession, sessionInfoMap, sidebarCollapsed, setTheme, type Theme } from "../state/sessions";
+import { groups, selectedGroups, setViewModeForGroup } from "../state/groups";
+import type { WshClient } from "../api/ws";
+
+interface PaletteItem {
+  type: "session" | "group" | "action";
+  label: string;
+  description?: string;
+  action: () => void;
+}
+
+interface CommandPaletteProps {
+  client: WshClient;
+  onClose: () => void;
+}
+
+function fuzzyMatch(query: string, text: string): number {
+  const lower = query.toLowerCase();
+  const target = text.toLowerCase();
+
+  // Exact prefix match scores highest
+  if (target.startsWith(lower)) return 3;
+  // Contains match
+  if (target.includes(lower)) return 2;
+  // Fuzzy: all chars present in order
+  let qi = 0;
+  for (let ti = 0; ti < target.length && qi < lower.length; ti++) {
+    if (target[ti] === lower[qi]) qi++;
+  }
+  return qi === lower.length ? 1 : 0;
+}
+
+export function CommandPalette({ client, onClose }: CommandPaletteProps) {
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Focus on mount
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [onClose]);
+
+  // Build items
+  const items = useMemo((): PaletteItem[] => {
+    const result: PaletteItem[] = [];
+
+    // Sessions
+    for (const name of sessions.value) {
+      const info = sessionInfoMap.value.get(name);
+      result.push({
+        type: "session",
+        label: name,
+        description: info ? `${info.command || "shell"} — ${info.tags.length ? info.tags.join(", ") : "no tags"}` : undefined,
+        action: () => { focusedSession.value = name; onClose(); },
+      });
+    }
+
+    // Groups
+    for (const g of groups.value) {
+      if (g.tag === "all") continue; // Skip "all" in palette
+      result.push({
+        type: "group",
+        label: g.label,
+        description: `${g.sessions.length} sessions`,
+        action: () => { selectedGroups.value = [g.tag]; onClose(); },
+      });
+    }
+
+    // Actions
+    result.push({
+      type: "action",
+      label: "New Session",
+      description: "Create a new terminal session",
+      action: () => { client.createSession().catch(() => {}); onClose(); },
+    });
+
+    result.push({
+      type: "action",
+      label: "Toggle Sidebar",
+      action: () => { sidebarCollapsed.value = !sidebarCollapsed.value; onClose(); },
+    });
+
+    const themes: { id: Theme; label: string }[] = [
+      { id: "glass", label: "Glass" },
+      { id: "neon", label: "Neon" },
+      { id: "minimal", label: "Minimal" },
+      { id: "tokyo-night", label: "Tokyo Night" },
+      { id: "catppuccin", label: "Catppuccin" },
+      { id: "dracula", label: "Dracula" },
+    ];
+    for (const t of themes) {
+      result.push({
+        type: "action",
+        label: `Theme: ${t.label}`,
+        action: () => { setTheme(t.id); onClose(); },
+      });
+    }
+
+    const modes = [
+      { mode: "carousel" as const, label: "Carousel View" },
+      { mode: "tiled" as const, label: "Tiled View" },
+      { mode: "queue" as const, label: "Queue View" },
+    ];
+    for (const m of modes) {
+      result.push({
+        type: "action",
+        label: m.label,
+        action: () => {
+          const tag = selectedGroups.value[0] || "all";
+          setViewModeForGroup(tag, m.mode);
+          onClose();
+        },
+      });
+    }
+
+    return result;
+  }, [client, onClose]);
+
+  // Filter items
+  const filtered = useMemo(() => {
+    if (!query.trim()) return items;
+    return items
+      .map((item) => ({ item, score: fuzzyMatch(query, item.label) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => {
+        // Sort by type priority then score
+        const typePriority = { session: 0, group: 1, action: 2 };
+        const tp = typePriority[a.item.type] - typePriority[b.item.type];
+        if (tp !== 0) return tp;
+        return b.score - a.score;
+      })
+      .map((x) => x.item);
+  }, [query, items]);
+
+  // Reset selection when filter changes
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [filtered.length]);
+
+  // Keyboard navigation
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedIndex((i) => Math.min(i + 1, filtered.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const item = filtered[selectedIndex];
+      if (item) item.action();
+    }
+  }, [filtered, selectedIndex]);
+
+  // Scroll selected item into view
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const selected = list.children[selectedIndex] as HTMLElement | undefined;
+    selected?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex]);
+
+  return (
+    <div class="palette-backdrop" onClick={onClose}>
+      <div class="palette" onClick={(e: MouseEvent) => e.stopPropagation()}>
+        <input
+          ref={inputRef}
+          class="palette-input"
+          type="text"
+          placeholder="Type to search sessions, groups, actions..."
+          value={query}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          onKeyDown={handleKeyDown}
+        />
+        <div class="palette-list" ref={listRef}>
+          {filtered.length === 0 && (
+            <div class="palette-empty">No results</div>
+          )}
+          {filtered.map((item, i) => (
+            <div
+              key={`${item.type}-${item.label}`}
+              class={`palette-item ${i === selectedIndex ? "selected" : ""}`}
+              onClick={() => item.action()}
+              onMouseEnter={() => setSelectedIndex(i)}
+            >
+              <span class={`palette-type-badge palette-type-${item.type}`}>
+                {item.type === "session" ? "S" : item.type === "group" ? "G" : "A"}
+              </span>
+              <div class="palette-item-text">
+                <span class="palette-item-label">{item.label}</span>
+                {item.description && (
+                  <span class="palette-item-desc">{item.description}</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

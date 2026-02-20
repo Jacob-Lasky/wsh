@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { useCallback } from "preact/hooks";
 import { WshClient } from "./api/ws";
 import {
@@ -25,6 +25,7 @@ import {
 } from "./state/terminal";
 import { LayoutShell } from "./components/LayoutShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { CommandPalette } from "./components/CommandPalette";
 
 // Track unsubscribe functions for per-session subscriptions
 const unsubscribes = new Map<string, () => void>();
@@ -124,12 +125,19 @@ export function App() {
     };
   }, []);
 
-  // Keyboard shortcut for overview toggle
+  // Command palette state
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Keyboard shortcut: Super+K (or Ctrl+Shift+K fallback) to toggle command palette
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "o") {
+      const superKey = e.metaKey;
+      const fallback = e.ctrlKey && e.shiftKey;
+      if (!superKey && !fallback) return;
+
+      if (e.key === "k" || e.key === "K") {
         e.preventDefault();
-        viewMode.value = viewMode.value === "overview" ? "focused" : "overview";
+        setPaletteOpen((v) => !v);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -162,6 +170,9 @@ export function App() {
   return (
     <ErrorBoundary>
       <LayoutShell client={client} />
+      {paletteOpen && (
+        <CommandPalette client={client} onClose={() => setPaletteOpen(false)} />
+      )}
     </ErrorBoundary>
   );
 }
