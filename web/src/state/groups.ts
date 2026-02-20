@@ -50,18 +50,6 @@ export const groups = computed<Group[]>(() => {
 
   const result: Group[] = [];
 
-  const allSessions = Array.from(infoMap.keys());
-  const allBadge = allSessions.filter(
-    (s) => statuses.get(s) === "quiescent"
-  ).length;
-  result.push({
-    tag: "all",
-    label: "All Sessions",
-    sessions: allSessions,
-    isSpecial: true,
-    badgeCount: allBadge,
-  });
-
   const sortedTags = Array.from(tagGroups.keys()).sort();
   for (const tag of sortedTags) {
     const sessions = tagGroups.get(tag)!;
@@ -89,6 +77,18 @@ export const groups = computed<Group[]>(() => {
       badgeCount: badge,
     });
   }
+
+  const allSessions = Array.from(infoMap.keys());
+  const allBadge = allSessions.filter(
+    (s) => statuses.get(s) === "quiescent"
+  ).length;
+  result.push({
+    tag: "all",
+    label: "All Sessions",
+    sessions: allSessions,
+    isSpecial: true,
+    badgeCount: allBadge,
+  });
 
   return result;
 });
