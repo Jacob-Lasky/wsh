@@ -13,7 +13,9 @@ import {
   authToken,
   authRequired,
   authError,
+  sessionInfoMap,
 } from "./state/sessions";
+import type { SessionInfo } from "./api/types";
 import {
   setFullScreen,
   updateScreen,
@@ -171,16 +173,23 @@ async function initSessions(client: WshClient): Promise<void> {
     unsubscribes.clear();
     client.clearAllSubscriptions();
 
-    const list = await client.listSessions();
-    let names = list.map((s) => s.name);
+    let infos = await client.listSessions();
 
-    if (names.length === 0) {
+    if (infos.length === 0) {
       const created = await client.createSession();
-      names = [created.name];
+      infos = [created];
     }
 
+    const names = infos.map((s) => s.name);
     sessions.value = names;
     sessionOrder.value = [...names];
+
+    // Populate session info map with tag data
+    const infoMap = new Map<string, SessionInfo>();
+    for (const info of infos) {
+      infoMap.set(info.name, info);
+    }
+    sessionInfoMap.value = infoMap;
 
     if (!focusedSession.value || !names.includes(focusedSession.value)) {
       focusedSession.value = names[0];
@@ -237,6 +246,18 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
         sessions.value = [...sessions.value, name];
         sessionOrder.value = [...sessionOrder.value, name];
       }
+      // Update session info map
+      const createdMap = new Map(sessionInfoMap.value);
+      createdMap.set(name, {
+        name,
+        pid: raw.params?.pid ?? null,
+        command: raw.params?.command ?? "",
+        rows: raw.params?.rows ?? 24,
+        cols: raw.params?.cols ?? 80,
+        clients: raw.params?.clients ?? 0,
+        tags: raw.params?.tags ?? [],
+      });
+      sessionInfoMap.value = createdMap;
       // Always set up screen state and subscription if not already subscribed
       // (handles eager state updates from handleNewSession in StatusBar)
       if (!unsubscribes.has(name)) {
@@ -258,6 +279,10 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
       removeScreen(name);
       sessions.value = sessions.value.filter((s) => s !== name);
       sessionOrder.value = sessionOrder.value.filter((s) => s !== name);
+      // Remove from session info map
+      const destroyedMap = new Map(sessionInfoMap.value);
+      destroyedMap.delete(name);
+      sessionInfoMap.value = destroyedMap;
       if (focusedSession.value === name) {
         focusedSession.value = sessionOrder.value[0] ?? null;
       }
@@ -284,6 +309,15 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
 
     case "session_exited": {
       // Process exited but session object still exists
+      const exitedName = raw.params?.name;
+      if (exitedName) {
+        const exitedMap = new Map(sessionInfoMap.value);
+        const exitedInfo = exitedMap.get(exitedName);
+        if (exitedInfo) {
+          exitedMap.set(exitedName, { ...exitedInfo, pid: null });
+          sessionInfoMap.value = exitedMap;
+        }
+      }
       break;
     }
 
@@ -298,6 +332,15 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
       sessionOrder.value = sessionOrder.value.map((s) =>
         s === oldName ? newName : s,
       );
+
+      // Update session info map key
+      const renamedMap = new Map(sessionInfoMap.value);
+      const renamedInfo = renamedMap.get(oldName);
+      if (renamedInfo) {
+        renamedMap.delete(oldName);
+        renamedMap.set(newName, { ...renamedInfo, name: newName });
+      }
+      sessionInfoMap.value = renamedMap;
 
       // Move screen state from old signal to new signal
       const screenState = getScreen(oldName);
@@ -323,6 +366,19 @@ function handleLifecycleEvent(client: WshClient, raw: any): void {
             s === oldName ? newName : s,
           ),
         };
+      }
+      break;
+    }
+
+    case "session_tags_changed": {
+      const taggedName = raw.params?.name;
+      const tags = raw.params?.tags;
+      if (!taggedName || !tags) break;
+      const taggedMap = new Map(sessionInfoMap.value);
+      const taggedInfo = taggedMap.get(taggedName);
+      if (taggedInfo) {
+        taggedMap.set(taggedName, { ...taggedInfo, tags });
+        sessionInfoMap.value = taggedMap;
       }
       break;
     }
