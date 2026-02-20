@@ -81,7 +81,7 @@ export function ShortcutSheet({ onClose }: ShortcutSheetProps) {
 
   return (
     <div class="shortcut-backdrop" onClick={onClose}>
-      <div class="shortcut-sheet" ref={containerRef} onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <div class="shortcut-sheet" ref={containerRef} onClick={(e: MouseEvent) => e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
         <div class="shortcut-sheet-header">
           <span class="shortcut-sheet-title">Keyboard Shortcuts</span>
           <button class="shortcut-sheet-close" onClick={onClose}>&times;</button>

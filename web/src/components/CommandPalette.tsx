@@ -102,6 +102,7 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
       { id: "tokyo-night", label: "Tokyo Night" },
       { id: "catppuccin", label: "Catppuccin" },
       { id: "dracula", label: "Dracula" },
+      { id: "high-contrast", label: "High Contrast" },
     ];
     for (const t of themes) {
       result.push({
@@ -177,7 +178,7 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
 
   return (
     <div class="palette-backdrop" onClick={onClose}>
-      <div class="palette" onClick={(e: MouseEvent) => e.stopPropagation()}>
+      <div class="palette" role="dialog" aria-label="Command palette" onClick={(e: MouseEvent) => e.stopPropagation()}>
         <input
           ref={inputRef}
           class="palette-input"
@@ -186,8 +187,9 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
           value={query}
           onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
           onKeyDown={handleKeyDown}
+          aria-label="Search commands"
         />
-        <div class="palette-list" ref={listRef}>
+        <div class="palette-list" ref={listRef} role="listbox">
           {filtered.length === 0 && (
             <div class="palette-empty">No results</div>
           )}
@@ -197,6 +199,8 @@ export function CommandPalette({ client, onClose }: CommandPaletteProps) {
               class={`palette-item ${i === selectedIndex ? "selected" : ""}`}
               onClick={() => item.action()}
               onMouseEnter={() => setSelectedIndex(i)}
+              role="option"
+              aria-selected={i === selectedIndex}
             >
               <span class={`palette-type-badge palette-type-${item.type}`}>
                 {item.type === "session" ? "S" : item.type === "group" ? "G" : "A"}

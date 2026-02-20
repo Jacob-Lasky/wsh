@@ -8,6 +8,7 @@ const THEMES: { id: Theme; label: string; swatches: string[] }[] = [
   { id: "tokyo-night", label: "Tokyo Night", swatches: ["#1a1b26", "#a9b1d6", "#7aa2f7", "#9ece6a", "#f7768e"] },
   { id: "catppuccin", label: "Catppuccin", swatches: ["#1e1e2e", "#cdd6f4", "#cba6f7", "#a6e3a1", "#f38ba8"] },
   { id: "dracula", label: "Dracula", swatches: ["#282a36", "#f8f8f2", "#bd93f9", "#50fa7b", "#ff79c6"] },
+  { id: "high-contrast", label: "High Contrast", swatches: ["#000000", "#ffffff", "#ffff00", "#00ff00", "#ff0000"] },
 ];
 
 export function ThemePicker() {

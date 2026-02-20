@@ -13,11 +13,17 @@ interface SidebarProps {
   onToggleCollapse: () => void;
 }
 
+function statusLabel(status: SessionStatus | undefined): string {
+  return status === "quiescent" ? "Idle"
+    : status === "exited" ? "Exited"
+    : "Running";
+}
+
 function StatusDot({ status }: { status: SessionStatus | undefined }) {
   const cls = status === "quiescent" ? "status-dot-amber"
     : status === "exited" ? "status-dot-grey"
     : "status-dot-green";
-  return <span class={`mini-status-dot ${cls}`} />;
+  return <span class={`mini-status-dot ${cls}`} aria-label={statusLabel(status)} />;
 }
 
 export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
@@ -64,9 +70,12 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
             class={`sidebar-icon ${selected.includes(g.tag) ? "active" : ""}`}
             onClick={(e: MouseEvent) => handleGroupClick(g.tag, e)}
             title={`${g.label} (${g.sessions.length})`}
+            role="button"
+            aria-label={`Group: ${g.label}, ${g.sessions.length} sessions`}
+            aria-selected={selected.includes(g.tag)}
           >
             <span class="sidebar-icon-count">{g.sessions.length}</span>
-            {g.badgeCount > 0 && <span class="sidebar-badge">{g.badgeCount}</span>}
+            {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
           </div>
         ))}
         <div style={{ flex: 1 }} />
@@ -95,11 +104,14 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
             onDragOver={(e: DragEvent) => handleGroupDragOver(g.tag, e)}
             onDragLeave={handleGroupDragLeave}
             onDrop={(e: DragEvent) => handleGroupDrop(g.tag, e, client)}
+            role="button"
+            aria-label={`Group: ${g.label}, ${g.sessions.length} sessions`}
+            aria-selected={selected.includes(g.tag)}
           >
             <div class="sidebar-group-header">
               <span class="sidebar-group-label">{g.label}</span>
               <span class="sidebar-group-count">{g.sessions.length}</span>
-              {g.badgeCount > 0 && <span class="sidebar-badge">{g.badgeCount}</span>}
+              {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
             </div>
             {/* Mini-preview grid: up to 4 sessions in 2x2 */}
             {g.sessions.length > 0 && (
@@ -155,6 +167,14 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
         <button class="sidebar-new-session-btn" onClick={handleNewSession} title="New session">
           + New
         </button>
+      </div>
+      <div class="sr-only" aria-live="polite">
+        {allGroups.map((g) =>
+          g.sessions.map((s) => {
+            const st = statuses.get(s);
+            return `${s}: ${statusLabel(st)}`;
+          })
+        ).flat().join(". ")}
       </div>
     </div>
   );

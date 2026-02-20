@@ -13,11 +13,13 @@ interface MainContentProps {
 
 function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }) {
   return (
-    <div class="view-mode-toggle">
+    <div class="view-mode-toggle" role="radiogroup" aria-label="View mode">
       <button
         class={`view-mode-btn ${mode === "carousel" ? "active" : ""}`}
         onClick={() => setViewModeForGroup(groupTag, "carousel")}
         title="Carousel (Super+F)"
+        role="radio"
+        aria-checked={mode === "carousel"}
       >
         &#9655;
       </button>
@@ -25,6 +27,8 @@ function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }
         class={`view-mode-btn ${mode === "tiled" ? "active" : ""}`}
         onClick={() => setViewModeForGroup(groupTag, "tiled")}
         title="Tiled (Super+G)"
+        role="radio"
+        aria-checked={mode === "tiled"}
       >
         &#9638;
       </button>
@@ -32,6 +36,8 @@ function ViewModeToggle({ mode, groupTag }: { mode: ViewMode; groupTag: string }
         class={`view-mode-btn ${mode === "queue" ? "active" : ""}`}
         onClick={() => setViewModeForGroup(groupTag, "queue")}
         title="Queue (Super+Q)"
+        role="radio"
+        aria-checked={mode === "queue"}
       >
         &#9776;
       </button>

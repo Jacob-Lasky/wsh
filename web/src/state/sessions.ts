@@ -1,11 +1,11 @@
 import { signal } from "@preact/signals";
 import type { SessionInfo } from "../api/types";
 
-export type Theme = "glass" | "neon" | "minimal" | "tokyo-night" | "catppuccin" | "dracula";
+export type Theme = "glass" | "neon" | "minimal" | "tokyo-night" | "catppuccin" | "dracula" | "high-contrast";
 
 export type ViewMode = "carousel" | "tiled" | "queue";
 
-const validThemes: Theme[] = ["glass", "neon", "minimal", "tokyo-night", "catppuccin", "dracula"];
+const validThemes: Theme[] = ["glass", "neon", "minimal", "tokyo-night", "catppuccin", "dracula", "high-contrast"];
 const rawTheme = localStorage.getItem("wsh-theme");
 const storedTheme: Theme = validThemes.includes(rawTheme as Theme) ? (rawTheme as Theme) : "glass";
 const storedAuthToken = localStorage.getItem("wsh-auth-token");
