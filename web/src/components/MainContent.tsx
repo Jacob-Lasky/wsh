@@ -1,6 +1,7 @@
 import type { WshClient } from "../api/ws";
 import { selectedGroups, getViewModeForGroup, activeGroupSessions } from "../state/groups";
 import { focusedSession } from "../state/sessions";
+import { AutoGrid } from "./AutoGrid";
 import { DepthCarousel } from "./DepthCarousel";
 import { SessionPane } from "./SessionPane";
 
@@ -45,7 +46,21 @@ export function MainContent({ client }: MainContentProps) {
     );
   }
 
-  // Placeholder for tiled and queue modes (coming in Tasks 9 and 10)
+  if (mode === "tiled") {
+    return (
+      <div class="main-content">
+        <div class="main-header">
+          <span class="main-group-name">{groupLabel}</span>
+          <span class="main-session-count">{sessions.length} sessions</span>
+        </div>
+        <div class="main-body">
+          <AutoGrid sessions={sessions} client={client} />
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback for queue and other modes
   const displaySession = focused && sessions.includes(focused) ? focused : sessions[0];
   return (
     <div class="main-content">
