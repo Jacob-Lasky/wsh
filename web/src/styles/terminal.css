@@ -1157,3 +1157,126 @@ html, body, #app {
   opacity: 0.3;
   font-size: 14px;
 }
+
+/* ======================================================================
+   Tag Editor
+   ====================================================================== */
+
+.tag-editor {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--chrome, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 6px;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 140px;
+}
+
+.tag-editor-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+
+.tag-editor-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--fg, #ccc);
+}
+
+.tag-editor-remove {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 0 1px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.tag-editor-remove:hover {
+  opacity: 1;
+  color: #f87171;
+}
+
+.tag-editor-input-wrap {
+  position: relative;
+}
+
+.tag-editor-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border, #333);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.tag-editor-input:focus {
+  border-color: var(--accent, #666);
+}
+
+.tag-editor-input::placeholder {
+  color: var(--fg, #ccc);
+  opacity: 0.3;
+}
+
+.tag-editor-suggestions {
+  margin-top: 3px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tag-editor-suggestion {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: var(--fg, #ccc);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s;
+}
+
+.tag-editor-suggestion:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.tag-edit-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.5);
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0;
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 10px;
+  line-height: 1.2;
+  border-radius: 2px;
+  transition: opacity 0.15s;
+}
+
+.sidebar-preview-cell:hover .tag-edit-btn {
+  opacity: 0.6;
+}
+
+.tag-edit-btn:hover {
+  opacity: 1 !important;
+}

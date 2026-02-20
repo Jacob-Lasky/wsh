@@ -1,8 +1,9 @@
-import { useCallback } from "preact/hooks";
+import { useCallback, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { groups, selectedGroups, sessionStatuses, type SessionStatus } from "../state/groups";
 import { connectionState } from "../state/sessions";
 import { MiniTerminal } from "./MiniTerminal";
+import { TagEditor } from "./TagEditor";
 import { ThemePicker } from "./ThemePicker";
 
 interface SidebarProps {
@@ -23,6 +24,7 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
   const selected = selectedGroups.value;
   const connState = connectionState.value;
   const statuses = sessionStatuses.value;
+  const [editingSession, setEditingSession] = useState<string | null>(null);
 
   const handleGroupClick = useCallback((tag: string, e: MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -100,6 +102,20 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
                   <div key={s} class="sidebar-preview-cell">
                     <MiniTerminal session={s} />
                     <StatusDot status={statuses.get(s)} />
+                    <button
+                      class="tag-edit-btn"
+                      onClick={(e: MouseEvent) => { e.stopPropagation(); setEditingSession(s); }}
+                      title="Edit tags"
+                    >
+                      +
+                    </button>
+                    {editingSession === s && (
+                      <TagEditor
+                        session={s}
+                        client={client}
+                        onClose={() => setEditingSession(null)}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
