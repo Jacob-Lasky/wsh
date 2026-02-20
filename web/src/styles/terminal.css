@@ -916,6 +916,79 @@ html, body, #app {
   border-color: var(--accent, #666);
 }
 
+/* Theme Picker */
+
+.theme-picker {
+  position: relative;
+}
+
+.theme-picker-btn {
+  background: none;
+  border: none;
+  color: var(--fg, #ccc);
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 4px;
+  font-size: 16px;
+  line-height: 1;
+  transition: opacity 0.15s;
+}
+
+.theme-picker-btn:hover {
+  opacity: 1;
+}
+
+.theme-picker-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: var(--chrome, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 180px;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.theme-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg, #ccc);
+  transition: background 0.15s;
+}
+
+.theme-picker-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.theme-picker-option.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.theme-swatches {
+  display: flex;
+  gap: 2px;
+}
+
+.theme-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.theme-name {
+  font-size: 12px;
+}
+
 /* Collapsed sidebar */
 
 .sidebar-collapsed {

@@ -3,6 +3,7 @@ import type { WshClient } from "../api/ws";
 import { groups, selectedGroups, sessionStatuses, type SessionStatus } from "../state/groups";
 import { connectionState } from "../state/sessions";
 import { MiniTerminal } from "./MiniTerminal";
+import { ThemePicker } from "./ThemePicker";
 
 interface SidebarProps {
   client: WshClient;
@@ -121,6 +122,8 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
       </div>
       <div class="sidebar-footer">
         <div class={`status-dot ${connState}`} title={connState} />
+        <ThemePicker />
+        <div style={{ flex: 1 }} />
         <button class="sidebar-new-session-btn" onClick={handleNewSession} title="New session">
           + New
         </button>
