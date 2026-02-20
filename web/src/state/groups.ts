@@ -17,6 +17,20 @@ export interface QueueEntry {
 
 export const selectedGroups = signal<string[]>(["all"]);
 
+const storedCollapsed: string[] = JSON.parse(localStorage.getItem("wsh-collapsed-groups") || "[]");
+export const collapsedGroups = signal<Set<string>>(new Set(storedCollapsed));
+
+export function toggleGroupCollapsed(tag: string): void {
+  const updated = new Set(collapsedGroups.value);
+  if (updated.has(tag)) {
+    updated.delete(tag);
+  } else {
+    updated.add(tag);
+  }
+  collapsedGroups.value = updated;
+  localStorage.setItem("wsh-collapsed-groups", JSON.stringify(Array.from(updated)));
+}
+
 const storedViewModes = JSON.parse(localStorage.getItem("wsh-view-modes") || "{}");
 export const viewModePerGroup = signal<Record<string, ViewMode>>(storedViewModes);
 
