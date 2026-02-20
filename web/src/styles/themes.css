@@ -732,6 +732,144 @@
 }
 
 /* ==========================================================================
+   Theme: Tokyo Night
+   ========================================================================== */
+
+.theme-tokyo-night {
+  --bg: #1a1b26;
+  --fg: #a9b1d6;
+  --cursor-color: #7aa2f7;
+  --chrome: #16161e;
+  --chrome-solid: #16161e;
+  --border: #292e42;
+  --border-dim: #232433;
+  --accent: #7aa2f7;
+  --accent-glow: rgba(122, 162, 247, 0.15);
+
+  --c0: #1a1b26;
+  --c1: #f7768e;
+  --c2: #9ece6a;
+  --c3: #e0af68;
+  --c4: #7aa2f7;
+  --c5: #bb9af7;
+  --c6: #7dcfff;
+  --c7: #a9b1d6;
+  --c8: #414868;
+  --c9: #f7768e;
+  --c10: #9ece6a;
+  --c11: #e0af68;
+  --c12: #7aa2f7;
+  --c13: #bb9af7;
+  --c14: #7dcfff;
+  --c15: #c0caf5;
+}
+
+.theme-tokyo-night .term-cursor {
+  background: var(--accent);
+  color: var(--bg);
+  box-shadow: 0 0 4px rgba(122, 162, 247, 0.3);
+}
+
+.theme-tokyo-night .status-dot.connected { background: #9ece6a; }
+.theme-tokyo-night .status-dot.connecting {
+  background: #e0af68;
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+.theme-tokyo-night .status-dot.disconnected { background: #f7768e; }
+
+/* ==========================================================================
+   Theme: Catppuccin Mocha
+   ========================================================================== */
+
+.theme-catppuccin {
+  --bg: #1e1e2e;
+  --fg: #cdd6f4;
+  --cursor-color: #cba6f7;
+  --chrome: #181825;
+  --chrome-solid: #181825;
+  --border: #313244;
+  --border-dim: #2a2a3c;
+  --accent: #cba6f7;
+  --accent-glow: rgba(203, 166, 247, 0.15);
+
+  --c0: #45475a;
+  --c1: #f38ba8;
+  --c2: #a6e3a1;
+  --c3: #f9e2af;
+  --c4: #89b4fa;
+  --c5: #cba6f7;
+  --c6: #94e2d5;
+  --c7: #bac2de;
+  --c8: #585b70;
+  --c9: #f38ba8;
+  --c10: #a6e3a1;
+  --c11: #f9e2af;
+  --c12: #89b4fa;
+  --c13: #cba6f7;
+  --c14: #94e2d5;
+  --c15: #a6adc8;
+}
+
+.theme-catppuccin .term-cursor {
+  background: var(--accent);
+  color: var(--bg);
+  box-shadow: 0 0 4px rgba(203, 166, 247, 0.3);
+}
+
+.theme-catppuccin .status-dot.connected { background: #a6e3a1; }
+.theme-catppuccin .status-dot.connecting {
+  background: #f9e2af;
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+.theme-catppuccin .status-dot.disconnected { background: #f38ba8; }
+
+/* ==========================================================================
+   Theme: Dracula
+   ========================================================================== */
+
+.theme-dracula {
+  --bg: #282a36;
+  --fg: #f8f8f2;
+  --cursor-color: #bd93f9;
+  --chrome: #21222c;
+  --chrome-solid: #21222c;
+  --border: #44475a;
+  --border-dim: #383a4a;
+  --accent: #bd93f9;
+  --accent-glow: rgba(189, 147, 249, 0.15);
+
+  --c0: #282a36;
+  --c1: #ff5555;
+  --c2: #50fa7b;
+  --c3: #f1fa8c;
+  --c4: #6272a4;
+  --c5: #bd93f9;
+  --c6: #8be9fd;
+  --c7: #f8f8f2;
+  --c8: #44475a;
+  --c9: #ff6e6e;
+  --c10: #69ff94;
+  --c11: #ffffa5;
+  --c12: #d6acff;
+  --c13: #ff92df;
+  --c14: #a4ffff;
+  --c15: #ffffff;
+}
+
+.theme-dracula .term-cursor {
+  background: var(--accent);
+  color: var(--bg);
+  box-shadow: 0 0 4px rgba(189, 147, 249, 0.3);
+}
+
+.theme-dracula .status-dot.connected { background: #50fa7b; }
+.theme-dracula .status-dot.connecting {
+  background: #f1fa8c;
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+.theme-dracula .status-dot.disconnected { background: #ff5555; }
+
+/* ==========================================================================
    Shared theme utilities
    ========================================================================== */
 
