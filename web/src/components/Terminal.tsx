@@ -1,7 +1,8 @@
 import { useRef, useEffect, useCallback } from "preact/hooks";
 import { getScreenSignal, updateScreen } from "../state/terminal";
-import { connectionState, zoomLevel } from "../state/sessions";
+import { connectionState, focusedSession, zoomLevel } from "../state/sessions";
 import { spanStyle } from "../utils/terminal";
+import { keyToSequence } from "../utils/keymap";
 import type { WshClient } from "../api/ws";
 import type { FormattedLine } from "../api/types";
 
@@ -110,20 +111,61 @@ const RESIZE_DEBOUNCE_MS = 150;
 interface TerminalProps {
   session: string;
   client?: WshClient;
+  captureInput?: boolean;
 }
 
-export function Terminal({ session, client }: TerminalProps) {
+export function Terminal({ session, client, captureInput }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
   const userScrolledRef = useRef(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Subscribe only to this session's signal (not all sessions)
   const screen = getScreenSignal(session).value;
   const disconnected = connectionState.value !== "connected";
   const zoom = zoomLevel.value;
   const fontSize = BASE_FONT_SIZE * zoom;
+
+  // Auto-focus textarea when this session is focused (desktop input capture)
+  const isFocused = session === focusedSession.value;
+  useEffect(() => {
+    if (captureInput && isFocused && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [captureInput, isFocused]);
+
+  // Handle keyboard input from hidden textarea
+  const handleTextareaKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!client) return;
+    // Let Ctrl+Shift combos bubble up for UI shortcuts
+    if (e.ctrlKey && e.shiftKey) return;
+    const seq = keyToSequence(e);
+    if (seq !== null) {
+      e.preventDefault();
+      client.sendInput(session, seq).catch(() => {});
+    }
+  }, [client, session]);
+
+  // Handle text input (printable characters, IME, paste) from hidden textarea
+  const handleTextareaInput = useCallback(() => {
+    if (!client) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const value = ta.value;
+    if (value) {
+      client.sendInput(session, value).catch(() => {});
+      ta.value = "";
+    }
+  }, [client, session]);
+
+  // Click on terminal container focuses the hidden textarea
+  const handleContainerClick = useCallback(() => {
+    if (captureInput && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [captureInput]);
 
   // Measure character cell size and compute cols/rows for a given container size
   const computeGridSize = useCallback(() => {
@@ -313,6 +355,7 @@ export function Terminal({ session, client }: TerminalProps) {
       class={containerClass}
       ref={containerRef}
       style={{ fontSize: `${fontSize}px` }}
+      onClick={handleContainerClick}
     >
       {/* Hidden measurement span for character cell size */}
       <span
@@ -328,6 +371,19 @@ export function Terminal({ session, client }: TerminalProps) {
       >
         X
       </span>
+      {captureInput && (
+        <textarea
+          ref={textareaRef}
+          class="terminal-hidden-input"
+          onKeyDown={handleTextareaKeyDown}
+          onInput={handleTextareaInput}
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck={false}
+          aria-label={`Terminal input for ${session}`}
+        />
+      )}
       {allLines.map((line, i) =>
         renderLine(line, i, i === cursorLineIndex ? { col: screen.cursor.col } : null),
       )}
