@@ -14,6 +14,7 @@ import {
   authRequired,
   authError,
   sessionInfoMap,
+  sidebarCollapsed,
 } from "./state/sessions";
 import type { SessionInfo } from "./api/types";
 import {
@@ -23,6 +24,7 @@ import {
   removeScreen,
   getScreen,
 } from "./state/terminal";
+import { selectedGroups, groups, activeGroupSessions } from "./state/groups";
 import { LayoutShell } from "./components/LayoutShell";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { CommandPalette } from "./components/CommandPalette";
@@ -130,20 +132,70 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutSheetOpen, setShortcutSheetOpen] = useState(false);
 
-  // Keyboard shortcut: Super+K (or Ctrl+Shift+K fallback) to toggle command palette
+  // Global keyboard shortcuts: Super+X or Ctrl+Shift+X
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const superKey = e.metaKey;
       const fallback = e.ctrlKey && e.shiftKey;
       if (!superKey && !fallback) return;
 
-      if (e.key === "k" || e.key === "K") {
+      const key = e.key;
+
+      // Command palette
+      if (key === "k" || key === "K") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+        return;
       }
-      if (e.key === "?") {
+      // Shortcut help
+      if (key === "?") {
         e.preventDefault();
         setShortcutSheetOpen((v) => !v);
+        return;
+      }
+      // Toggle sidebar
+      if (key === "b" || key === "B") {
+        e.preventDefault();
+        sidebarCollapsed.value = !sidebarCollapsed.value;
+        localStorage.setItem("wsh-sidebar-collapsed", String(sidebarCollapsed.value));
+        return;
+      }
+      // New session
+      if (key === "n" || key === "N") {
+        e.preventDefault();
+        clientRef.current?.createSession().catch(() => {});
+        return;
+      }
+      // Kill focused session
+      if (key === "w" || key === "W") {
+        e.preventDefault();
+        const focused = focusedSession.value;
+        if (focused && confirm(`Kill session "${focused}"?`)) {
+          clientRef.current?.killSession(focused).catch(() => {});
+        }
+        return;
+      }
+      // Jump to Nth session (Super+1-9)
+      if (key >= "1" && key <= "9") {
+        e.preventDefault();
+        const idx = parseInt(key) - 1;
+        const groupSessions = activeGroupSessions.value;
+        if (idx < groupSessions.length) {
+          focusedSession.value = groupSessions[idx];
+        }
+        return;
+      }
+      // Cycle sidebar groups
+      if (key === "Tab") {
+        e.preventDefault();
+        const allGroups = groups.value;
+        if (allGroups.length === 0) return;
+        const current = selectedGroups.value[0] || "all";
+        const currentIdx = allGroups.findIndex((g) => g.tag === current);
+        const direction = e.shiftKey ? -1 : 1;
+        const nextIdx = (currentIdx + direction + allGroups.length) % allGroups.length;
+        selectedGroups.value = [allGroups[nextIdx].tag];
+        return;
       }
     };
     window.addEventListener("keydown", handleKeyDown);
