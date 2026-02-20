@@ -101,7 +101,7 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
       {/* Top bar */}
       <div class="queue-top-bar">
         <div class="queue-pending">
-          <span class="queue-section-label">Pending ({pending.length})</span>
+          <span class="queue-section-label">Idle ({pending.length})</span>
           <div class="queue-thumbnails">
             {pending.map((e) => (
               <div
@@ -115,7 +115,7 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
           </div>
         </div>
         <div class="queue-handled">
-          <span class="queue-section-label">Active ({active.length + handled.length})</span>
+          <span class="queue-section-label">Running ({active.length + handled.length})</span>
           <div class="queue-thumbnails muted">
             {active.map((s) => (
               <div key={s} class={`queue-thumb ${s === currentSession ? "active" : ""}`}

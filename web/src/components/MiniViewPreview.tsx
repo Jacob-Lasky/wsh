@@ -107,7 +107,7 @@ function MiniQueue({ sessions, groupTag }: { sessions: string[]; groupTag: strin
   return (
     <div class="mini-queue">
       <div class="mini-queue-bar">
-        <span class="mini-queue-count">{pending.length} pending</span>
+        <span class="mini-queue-count">{pending.length} idle</span>
       </div>
       {currentSession && (
         <div class="mini-queue-current">
