@@ -5,9 +5,10 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, llm-agents, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
@@ -25,6 +26,8 @@
             jq
             websocat
             bun
+          ] ++ [
+            llm-agents.packages.${system}.agent-browser
           ];
 
           # nix develop overwrites $SHELL with stdenv's readline-less bash,
