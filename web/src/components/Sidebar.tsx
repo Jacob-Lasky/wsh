@@ -14,15 +14,12 @@ interface SidebarProps {
 }
 
 function statusLabel(status: SessionStatus | undefined): string {
-  return status === "quiescent" ? "Idle"
-    : status === "exited" ? "Exited"
-    : "Running";
+  return status === "quiescent" ? "Idle" : "Running";
 }
 
 function StatusDot({ status }: { status: SessionStatus | undefined }) {
-  const cls = status === "quiescent" ? "status-dot-amber"
-    : status === "exited" ? "status-dot-grey"
-    : "status-dot-green";
+  const cls = status === "quiescent" ? "status-dot-green"
+    : "status-dot-amber";
   return <span class={`mini-status-dot ${cls}`} aria-label={statusLabel(status)} />;
 }
 
