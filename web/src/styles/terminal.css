@@ -958,6 +958,84 @@ html, body, #app {
   min-width: 12px;
 }
 
+.sidebar-icon-count {
+  font-size: 9px;
+  color: var(--fg, #ccc);
+  opacity: 0.6;
+}
+
+.sidebar-new-icon {
+  font-size: 16px;
+  font-weight: 300;
+}
+
+/* Mini terminal previews */
+
+.sidebar-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-top: 6px;
+  margin-bottom: 4px;
+}
+
+.sidebar-preview-cell {
+  position: relative;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.mini-terminal {
+  font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
+  font-size: 4px;
+  line-height: 1.2;
+  padding: 2px;
+  color: var(--fg, #ccc);
+  overflow: hidden;
+  white-space: pre;
+  min-height: 20px;
+}
+
+.mini-term-line {
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  height: 4.8px;
+}
+
+/* Status dots for mini-previews */
+
+.mini-status-dot {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.status-dot-green {
+  background: #4ade80;
+}
+
+.status-dot-amber {
+  background: #fbbf24;
+}
+
+.status-dot-grey {
+  background: #6b7280;
+}
+
+/* Group timestamp */
+
+.sidebar-group-timestamp {
+  font-size: 9px;
+  color: var(--fg, #ccc);
+  opacity: 0.35;
+  margin-top: 2px;
+}
+
 /* ======================================================================
    Main Content
    ====================================================================== */
