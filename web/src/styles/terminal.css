@@ -1897,6 +1897,23 @@ html, body, #app {
   font-weight: 600;
 }
 
+.queue-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-shortcut-hint {
+  font-size: 9px;
+  color: var(--fg, #ccc);
+  opacity: 0.3;
+  font-family: var(--font-mono, "JetBrains Mono", "Fira Code", monospace);
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
 .queue-thumbnails {
   display: flex;
   gap: 4px;

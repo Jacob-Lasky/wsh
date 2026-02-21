@@ -101,7 +101,12 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
       {/* Top bar */}
       <div class="queue-top-bar">
         <div class="queue-pending">
-          <span class="queue-section-label">Idle ({pending.length})</span>
+          <div class="queue-section-header">
+            <span class="queue-section-label">Idle ({pending.length})</span>
+            {currentSession && pending.some((e) => e.session === currentSession) && (
+              <kbd class="queue-shortcut-hint">Ctrl+Shift+Enter to dismiss</kbd>
+            )}
+          </div>
           <div class="queue-thumbnails">
             {pending.map((e) => (
               <div
