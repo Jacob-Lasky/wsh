@@ -6,7 +6,6 @@ export interface Group {
   label: string;
   sessions: string[];
   isSpecial: boolean;
-  badgeCount: number;
 }
 
 export interface QueueEntry {
@@ -46,7 +45,6 @@ export const tileLayouts = signal<Record<string, {
 
 export const groups = computed<Group[]>(() => {
   const infoMap = sessionInfoMap.value;
-  const statuses = sessionStatuses.value;
   const tagGroups = new Map<string, string[]>();
   const untagged: string[] = [];
 
@@ -67,41 +65,29 @@ export const groups = computed<Group[]>(() => {
   const sortedTags = Array.from(tagGroups.keys()).sort();
   for (const tag of sortedTags) {
     const sessions = tagGroups.get(tag)!;
-    const badge = sessions.filter(
-      (s) => statuses.get(s) === "idle"
-    ).length;
     result.push({
       tag,
       label: tag,
       sessions,
       isSpecial: false,
-      badgeCount: badge,
     });
   }
 
   if (untagged.length > 0) {
-    const badge = untagged.filter(
-      (s) => statuses.get(s) === "idle"
-    ).length;
     result.push({
       tag: "untagged",
       label: "Untagged",
       sessions: untagged,
       isSpecial: true,
-      badgeCount: badge,
     });
   }
 
   const allSessions = Array.from(infoMap.keys());
-  const allBadge = allSessions.filter(
-    (s) => statuses.get(s) === "idle"
-  ).length;
   result.push({
     tag: "all",
     label: "All Sessions",
     sessions: allSessions,
     isSpecial: true,
-    badgeCount: allBadge,
   });
 
   return result;

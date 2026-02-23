@@ -14,7 +14,6 @@ export function BottomSheet({ client }: BottomSheetProps) {
   const connState = connectionState.value;
 
   const primaryGroup = allGroups.find(g => g.tag === selected[0]) || allGroups[0];
-  const badgeTotal = allGroups.reduce((sum, g) => sum + g.badgeCount, 0);
 
   const handleGroupClick = useCallback((tag: string) => {
     selectedGroups.value = [tag];
@@ -32,7 +31,6 @@ export function BottomSheet({ client }: BottomSheetProps) {
       <div class="bottom-sheet-tab" onClick={() => setExpanded(!expanded)} role="button" aria-expanded={expanded} aria-label={`Session groups: ${primaryGroup?.label || "Sessions"}`}>
         <div class={`status-dot ${connState}`} />
         <span class="bottom-sheet-group-name">{primaryGroup?.label || "Sessions"}</span>
-        {badgeTotal > 0 && <span class="sidebar-badge" aria-label={`${badgeTotal} sessions need attention`}>{badgeTotal}</span>}
         <div style={{ flex: 1 }} />
         <button class="bottom-sheet-new-btn" onClick={(e: MouseEvent) => { e.stopPropagation(); handleNewSession(); }} aria-label="New session">
           +
@@ -57,7 +55,6 @@ export function BottomSheet({ client }: BottomSheetProps) {
                 >
                   <span class="bottom-sheet-group-label">{g.label}</span>
                   <span class="bottom-sheet-group-count">{g.sessions.length}</span>
-                  {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
                 </div>
               ))}
             </div>

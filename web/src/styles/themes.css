@@ -924,11 +924,6 @@
   border-left-color: var(--accent);
 }
 
-.theme-high-contrast .sidebar-badge {
-  background: var(--accent);
-  color: #000000;
-  font-weight: 700;
-}
 
 .theme-high-contrast .tile-content.tile-focused {
   border-color: var(--accent);

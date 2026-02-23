@@ -59,7 +59,6 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
             aria-selected={selected.includes(g.tag)}
           >
             <span class="sidebar-icon-count">{g.sessions.length}</span>
-            {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
           </div>
         ))}
         <div style={{ flex: 1 }} />
@@ -114,7 +113,6 @@ export function Sidebar({ client, collapsed, onToggleCollapse }: SidebarProps) {
                 {!isCollapsed && (
                   <span class="sidebar-group-count">{g.sessions.length}</span>
                 )}
-                {g.badgeCount > 0 && <span class="sidebar-badge" aria-label={`${g.badgeCount} sessions need attention`}>{g.badgeCount}</span>}
               </div>
               {!isCollapsed && sortedSessions.length > 0 && (
                 <div class="thumb-grid">
