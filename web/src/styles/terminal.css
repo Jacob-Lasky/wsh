@@ -1946,10 +1946,6 @@ html, body, #app {
   border-color: var(--accent, #666);
 }
 
-.queue-thumb.pending.active {
-  box-shadow: 0 0 0 1px var(--accent, #666);
-}
-
 .queue-pending-dot {
   position: absolute;
   top: 3px;
@@ -2335,7 +2331,8 @@ html, body, #app {
   }
 
   /* Disable neon pulse animations */
-  .status-dot.connecting {
+  .status-dot.connecting,
+  .queue-pending-dot {
     animation: none !important;
   }
 

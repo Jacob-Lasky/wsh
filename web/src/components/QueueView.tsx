@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
 import { idleQueues, enqueueSession, dismissQueueEntry, removeQueueEntry, sessionStatuses } from "../state/groups";
 import { focusedSession } from "../state/sessions";
@@ -31,10 +31,7 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
   );
 
   // Flat navigation list: idle then running
-  const navList = useMemo(
-    () => [...idle.map((e) => e.session), ...running],
-    [idle, running]
-  );
+  const navList = [...idle.map((e) => e.session), ...running];
 
   // Selection state
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
