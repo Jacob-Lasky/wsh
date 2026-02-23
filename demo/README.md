@@ -31,9 +31,15 @@ On a 4K 16:9 monitor with Sway, arrange three visible windows:
 |                         |
 +------------+------------+
 | TERMINAL 1 | TERMINAL 2 |
-| wsh attach | demo.sh    |
+| wsh build  | demo.sh    |
 +------------+------------+
 ```
+
+- **Top:** Browser with the wsh web UI in grid view. This is the hero shot.
+- **Bottom-left:** A live `wsh` session named `build`. The demo script will
+  drive this session via the API — the viewer sees commands appearing as if
+  typed by a ghost.
+- **Bottom-right:** The demo script running, showing narration and curl calls.
 
 Tips:
 - Set the browser to grid view by pressing `g`
@@ -49,12 +55,12 @@ Tips:
 
 2. **Open the browser** to http://localhost:8080 and press `g` for grid view.
 
-3. **In Terminal 1** (bottom-left, visible), run:
+3. **In Terminal 1** (bottom-left, visible), start a named session:
    ```
-   wsh attach build
+   wsh --name build --tag ci
    ```
-   This will block until the demo creates the `build` session -- that is
-   expected.
+   This creates the `build` session and attaches your terminal to it. You'll
+   see a shell prompt — leave it here. The demo script will drive it.
 
 4. **Start screen capture** (in an off-screen terminal):
    ```
@@ -107,8 +113,8 @@ SPEED=2 ./demo/demo.sh
 | Problem | Solution |
 |---------|----------|
 | "wsh server is not running at ..." | Start the server first: `wsh server --ephemeral` |
+| "'build' session not found" | Start the build session first: `wsh --name build --tag ci` in Terminal 1 |
 | Sessions not appearing in web UI | Refresh the browser; verify URL matches `WSH_URL` |
-| `wsh attach build` hangs | The session has not been created yet -- start `demo.sh` first, then attach |
 | Overlays not visible | Make sure the browser is in grid view (press `g`) |
 | Timing feels off | Adjust `SPEED` (e.g., `SPEED=1.5` to speed things up) |
 | `wf-recorder` errors | Ensure you are running Wayland/Sway. For X11, use `ffmpeg -f x11grab -i :0 demo-raw.mp4` instead |

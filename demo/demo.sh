@@ -2,11 +2,12 @@
 set -euo pipefail
 
 # ── Main demo orchestrator ──────────────────────────────────────
-# Creates 4 wsh sessions via the HTTP API and drives a choreographed
+# Drives 4 wsh sessions through the HTTP API in a choreographed
 # demonstration: build, test, AI agent interaction, and system monitor.
 #
 # Prerequisites:
-#   - A running wsh server (e.g. `wsh server --bind 127.0.0.1:8080`)
+#   - A running wsh server (e.g. `wsh server --ephemeral`)
+#   - A pre-existing "build" session (e.g. `wsh --name build --tag ci`)
 #   - curl and bc available on PATH
 #
 # Environment:
@@ -100,7 +101,7 @@ kill_session() {
 # ── Cleanup ─────────────────────────────────────────────────────
 
 cleanup() {
-  kill_session build
+  # Don't kill "build" — it was started manually in a visible terminal.
   kill_session test
   kill_session agent
   kill_session monitor
@@ -116,9 +117,16 @@ if ! curl -sf "${BASE}/health" -o /dev/null 2>/dev/null; then
   exit 1
 fi
 
+# The "build" session should already exist (started manually via `wsh --name
+# build --tag ci` in a visible terminal). We verify it, then create the rest.
+if ! curl -sf "${BASE}/sessions/build" -o /dev/null 2>/dev/null; then
+  echo "Error: 'build' session not found. Start it first:" >&2
+  echo "  wsh --name build --tag ci" >&2
+  exit 1
+fi
+
 narrate "Creating sessions..."
-create_session build ci
-printf '   + build (ci)\n'
+printf '   ✓ build (ci) — already running\n'
 create_session test ci
 printf '   + test (ci)\n'
 create_session agent ai
