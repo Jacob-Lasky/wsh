@@ -1920,10 +1920,6 @@ html, body, #app {
   overflow-x: auto;
 }
 
-.queue-thumbnails.muted {
-  opacity: 0.5;
-}
-
 .queue-thumb {
   width: 80px;
   height: 40px;
@@ -1945,9 +1941,6 @@ html, body, #app {
   box-shadow: 0 0 0 1px var(--accent, #666);
 }
 
-.queue-thumb.handled {
-  opacity: 0.4;
-}
 
 .queue-center {
   flex: 1;

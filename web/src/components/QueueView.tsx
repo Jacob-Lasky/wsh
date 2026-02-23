@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { WshClient } from "../api/ws";
-import { idleQueues, enqueueSession, dismissQueueEntry, sessionStatuses } from "../state/groups";
+import { idleQueues, enqueueSession, dismissQueueEntry, removeQueueEntry, sessionStatuses } from "../state/groups";
 import { focusedSession } from "../state/sessions";
 import { SessionPane } from "./SessionPane";
 import { MiniTermContent } from "./MiniViewPreview";
@@ -13,30 +13,47 @@ interface QueueViewProps {
 
 export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
   const queue = idleQueues.value[groupTag] || [];
-  const pending = queue.filter((e) => e.status === "pending");
-  const handled = queue.filter((e) => e.status === "handled");
+  const statuses = sessionStatuses.value;
 
-  // Sessions not in the queue at all (active, haven't become idle yet)
-  const queuedNames = new Set(queue.map((e) => e.session));
-  const active = sessions.filter((s) => !queuedNames.has(s));
+  // Idle section: pending first (by idleAt), then acknowledged (by idleAt)
+  const pending = queue
+    .filter((e) => e.status === "pending")
+    .sort((a, b) => a.idleAt - b.idleAt);
+  const acknowledged = queue
+    .filter((e) => e.status === "acknowledged")
+    .sort((a, b) => a.idleAt - b.idleAt);
+  const idle = [...pending, ...acknowledged];
 
-  // Manual selection overrides automatic queue order
-  const [manualSelection, setManualSelection] = useState<string | null>(null);
+  // Running section: sessions whose actual status is not idle
+  const idleNames = new Set(queue.map((e) => e.session));
+  const running = sessions.filter(
+    (s) => !idleNames.has(s) && statuses.get(s) !== "idle"
+  );
 
-  // Current session to display (manual override or first pending)
-  const autoSession = pending[0]?.session || null;
-  const currentSession = manualSelection && sessions.includes(manualSelection)
-    ? manualSelection
-    : autoSession;
+  // Flat navigation list: idle then running
+  const navList = useMemo(
+    () => [...idle.map((e) => e.session), ...running],
+    [idle, running]
+  );
 
-  // Focus the current queued session
+  // Selection state
+  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+
+  // Resolve current session: manual selection if valid, else oldest pending, else first in nav
+  const oldestPending = pending[0]?.session || null;
+  const currentSession =
+    selectedSession && navList.includes(selectedSession)
+      ? selectedSession
+      : oldestPending || navList[0] || null;
+
+  // Focus the current session for other components
   useEffect(() => {
     if (currentSession) {
       focusedSession.value = currentSession;
     }
   }, [currentSession]);
 
-  // Watch sessionStatuses for idle transitions and enqueue sessions
+  // Watch sessionStatuses for transitions
   const prevStatuses = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     const statuses = sessionStatuses.value;
@@ -45,9 +62,10 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
       const prev = prevStatuses.current.get(s);
       if (current === "idle" && prev !== "idle") {
         enqueueSession(groupTag, s);
+      } else if (current !== "idle" && prev === "idle") {
+        removeQueueEntry(groupTag, s);
       }
     }
-    // Update previous statuses
     const updated = new Map<string, string>();
     for (const s of sessions) {
       const st = statuses.get(s);
@@ -56,27 +74,55 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
     prevStatuses.current = updated;
   }, [sessions, groupTag, sessionStatuses.value]);
 
-  // Dismiss current session
+  // Dismiss: acknowledge current if pending, then jump to next pending
   const handleDismiss = useCallback(() => {
-    if (!currentSession) return;
-    const isPending = pending.some((e) => e.session === currentSession);
-    if (isPending) {
-      dismissQueueEntry(groupTag, currentSession);
+    if (currentSession) {
+      const isPending = pending.some((e) => e.session === currentSession);
+      if (isPending) {
+        dismissQueueEntry(groupTag, currentSession);
+      }
     }
-    setManualSelection(null);
+    // Jump to oldest pending (after the one we just dismissed)
+    // The signal update is synchronous, so re-read the queue
+    const updatedQueue = idleQueues.value[groupTag] || [];
+    const nextPending = updatedQueue.find((e) => e.status === "pending" && e.session !== currentSession);
+    setSelectedSession(nextPending?.session || null);
   }, [groupTag, currentSession, pending]);
 
-  // Ctrl+Shift+Enter to dismiss
+  // Left/right navigation: Ctrl+Shift+H/L or Left/Right
+  const navigate = useCallback((direction: -1 | 1) => {
+    if (navList.length === 0) return;
+    const currentIndex = currentSession ? navList.indexOf(currentSession) : -1;
+    const newIndex = currentIndex === -1
+      ? 0
+      : (currentIndex + direction + navList.length) % navList.length;
+    setSelectedSession(navList[newIndex]);
+  }, [navList, currentSession]);
+
+  // Keyboard handler
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key === "Enter") {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+
+      if (e.key === "ArrowLeft" || e.key === "h" || e.key === "H") {
+        e.preventDefault();
+        navigate(-1);
+      } else if (e.key === "ArrowRight" || e.key === "l" || e.key === "L") {
+        e.preventDefault();
+        navigate(1);
+      } else if (e.key === "Enter") {
         e.preventDefault();
         handleDismiss();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleDismiss]);
+  }, [navigate, handleDismiss]);
+
+  // Idle section label with pending count
+  const idleLabel = pending.length > 0
+    ? `Idle (${pending.length} new \u00b7 ${idle.length})`
+    : `Idle (${idle.length})`;
 
   return (
     <div class="queue-view">
@@ -84,40 +130,38 @@ export function QueueView({ sessions, groupTag, client }: QueueViewProps) {
       <div class="queue-top-bar">
         <div class="queue-pending">
           <div class="queue-section-header">
-            <span class="queue-section-label">Idle ({pending.length})</span>
-            {currentSession && pending.some((e) => e.session === currentSession) && (
-              <kbd class="queue-shortcut-hint">Ctrl+Shift+Enter to dismiss</kbd>
-            )}
+            <span class="queue-section-label">{idleLabel}</span>
+            <kbd class="queue-shortcut-hint">Ctrl+Shift+Enter to dismiss</kbd>
           </div>
           <div class="queue-thumbnails">
-            {pending.map((e) => (
+            {idle.map((e) => (
               <div
                 key={e.session}
-                class={`queue-thumb ${e.session === currentSession ? "active" : ""}`}
-                onClick={() => setManualSelection(e.session)}
+                class={`queue-thumb${e.session === currentSession ? " active" : ""}${e.status === "pending" ? " pending" : ""}`}
+                onClick={() => setSelectedSession(e.session)}
               >
+                {e.status === "pending" && <span class="queue-pending-dot" />}
                 <MiniTermContent session={e.session} />
               </div>
             ))}
           </div>
         </div>
-        <div class="queue-handled">
-          <span class="queue-section-label">Running ({active.length + handled.length})</span>
-          <div class="queue-thumbnails muted">
-            {active.map((s) => (
-              <div key={s} class={`queue-thumb ${s === currentSession ? "active" : ""}`}
-                onClick={() => setManualSelection(s)}>
-                <MiniTermContent session={s} />
-              </div>
-            ))}
-            {handled.map((e) => (
-              <div key={e.session} class={`queue-thumb handled ${e.session === currentSession ? "active" : ""}`}
-                onClick={() => setManualSelection(e.session)}>
-                <MiniTermContent session={e.session} />
-              </div>
-            ))}
+        {running.length > 0 && (
+          <div class="queue-handled">
+            <span class="queue-section-label">Running ({running.length})</span>
+            <div class="queue-thumbnails">
+              {running.map((s) => (
+                <div
+                  key={s}
+                  class={`queue-thumb${s === currentSession ? " active" : ""}`}
+                  onClick={() => setSelectedSession(s)}
+                >
+                  <MiniTermContent session={s} />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Center content */}
