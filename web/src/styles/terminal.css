@@ -1921,6 +1921,7 @@ html, body, #app {
 }
 
 .queue-thumb {
+  position: relative;
   width: 80px;
   height: 40px;
   border-radius: 4px;
@@ -1941,6 +1942,25 @@ html, body, #app {
   box-shadow: 0 0 0 1px var(--accent, #666);
 }
 
+.queue-thumb.pending {
+  border-color: var(--accent, #666);
+}
+
+.queue-thumb.pending.active {
+  box-shadow: 0 0 0 1px var(--accent, #666);
+}
+
+.queue-pending-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #f90);
+  z-index: 1;
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
 
 .queue-center {
   flex: 1;
