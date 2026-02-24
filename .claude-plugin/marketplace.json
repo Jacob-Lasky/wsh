@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "wsh",
+  "description": "HTTP, WebSocket, and MCP server APIs for terminal I/O \u2014 plus AI skills that teach agents how to use them",
+  "owner": {
+    "name": "Deepgram",
+    "url": "https://deepgram.com"
+  },
+  "plugins": [
+    {
+      "name": "wsh",
+      "description": "HTTP, WebSocket, and MCP server APIs for terminal I/O \u2014 plus AI skills that teach agents how to use them",
+      "source": ".",
+      "category": "development",
+      "homepage": "https://github.com/deepgram/wsh"
+    }
+  ]
+}
