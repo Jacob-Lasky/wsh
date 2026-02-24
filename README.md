@@ -20,6 +20,8 @@ The implications land fast: orchestrator agents that launch fleets of AI coding 
 - **Audit and monitor**: Observe terminal activity for security, compliance, or operational awareness
 - **Automate end-to-end**: Set up entire environments, handling every interactive prompt and error along the way
 
+![wsh demo](demo/demo.gif)
+
 ## Quick Start
 
 ### Getting Started
