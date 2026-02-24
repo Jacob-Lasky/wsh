@@ -10,7 +10,10 @@
     {
       "name": "wsh",
       "description": "HTTP, WebSocket, and MCP server APIs for terminal I/O \u2014 plus AI skills that teach agents how to use them",
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "Jacob-Lasky/wsh"
+      },
       "category": "development",
       "homepage": "https://github.com/deepgram/wsh"
     }
