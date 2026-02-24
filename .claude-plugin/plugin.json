@@ -1,0 +1,10 @@
+{
+  "name": "wsh",
+  "description": "HTTP, WebSocket, and MCP server APIs for terminal I/O — plus AI skills that teach agents how to use them",
+  "version": "1.0.0",
+  "author": {
+    "name": "Deepgram"
+  },
+  "homepage": "https://github.com/deepgram/wsh",
+  "license": "ISC"
+}
