@@ -71,8 +71,12 @@ struct Cli {
     alt_screen: bool,
 
     /// Server instance name (like tmux -L). Each instance gets its own socket.
-    #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
+    #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default", global = true)]
     server_name: String,
+
+    /// Path to the Unix domain socket (overrides -L)
+    #[arg(long, global = true)]
+    socket: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -87,10 +91,6 @@ enum Commands {
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
 
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
         /// Run in ephemeral mode (exit when last session ends).
         /// By default, `wsh server` runs in persistent mode.
         #[arg(long)]
@@ -99,10 +99,6 @@ enum Commands {
         /// Maximum number of concurrent sessions (no limit if omitted)
         #[arg(long)]
         max_sessions: Option<usize>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
     },
 
     /// Attach to an existing session on the server
@@ -114,57 +110,25 @@ enum Commands {
         #[arg(long, default_value = "all")]
         scrollback: String,
 
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
         /// Use alternate screen buffer (restores previous screen on exit, but
         /// disables native terminal scrollback while wsh is running)
         #[arg(long)]
         alt_screen: bool,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
     },
 
     /// List active sessions on the server
-    List {
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
-    },
+    List {},
 
     /// Kill (destroy) a session on the server
     Kill {
         /// Session name to kill
         name: String,
-
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
     },
 
     /// Detach all clients from a session (session stays alive)
     Detach {
         /// Session name to detach
         name: String,
-
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
     },
 
     /// Query or set server persistence mode.
@@ -186,15 +150,7 @@ enum Commands {
     },
 
     /// Print the server's auth token (retrieved via Unix socket)
-    Token {
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
-    },
+    Token {},
 
     /// Manage tags on a session
     Tag {
@@ -208,26 +164,10 @@ enum Commands {
         /// Tags to remove
         #[arg(long = "remove")]
         remove: Vec<String>,
-
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
     },
 
     /// Stop the running wsh server
-    Stop {
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
-    },
+    Stop {},
 
     /// Start an MCP server over stdio (for AI hosts like Claude Desktop)
     Mcp {
@@ -235,17 +175,9 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: SocketAddr,
 
-        /// Path to the Unix domain socket (overrides -L)
-        #[arg(long)]
-        socket: Option<PathBuf>,
-
         /// Authentication token
         #[arg(long, env = "WSH_TOKEN")]
         token: Option<String>,
-
-        /// Server instance name (like tmux -L). Each instance gets its own socket.
-        #[arg(short = 'L', long = "server-name", env = "WSH_SERVER_NAME", default_value = "default")]
-        server_name: String,
     },
 }
 
@@ -306,35 +238,40 @@ async fn main() -> Result<(), WshError> {
         init_tracing();
     }
 
+    // Global args: defined on Cli with `global = true` so they can be
+    // passed before or after the subcommand (e.g. `wsh -L foo list`).
+    let socket = cli.socket.clone();
+    let server_name = cli.server_name.clone();
+
     match cli.command {
-        Some(Commands::Server { bind, token, socket, ephemeral, max_sessions, server_name }) => {
+        Some(Commands::Server { bind, token, ephemeral, max_sessions }) => {
             run_server(bind, token, socket, ephemeral, max_sessions, server_name).await
         }
-        Some(Commands::Attach { name, scrollback, socket, alt_screen, server_name }) => {
+        Some(Commands::Attach { name, scrollback, alt_screen }) => {
             run_attach(name, scrollback, socket, alt_screen, server_name).await
         }
-        Some(Commands::List { socket, server_name }) => {
+        Some(Commands::List {}) => {
             run_list(socket, server_name).await
         }
-        Some(Commands::Kill { name, socket, server_name }) => {
+        Some(Commands::Kill { name }) => {
             run_kill(name, socket, server_name).await
         }
-        Some(Commands::Detach { name, socket, server_name }) => {
+        Some(Commands::Detach { name }) => {
             run_detach(name, socket, server_name).await
         }
-        Some(Commands::Token { socket, server_name }) => {
+        Some(Commands::Token {}) => {
             run_token(socket, server_name).await
         }
         Some(Commands::Persist { value, bind, token }) => {
             run_persist(value, bind, token).await
         }
-        Some(Commands::Tag { name, add, remove, socket, server_name }) => {
+        Some(Commands::Tag { name, add, remove }) => {
             run_tag(name, add, remove, socket, server_name).await
         }
-        Some(Commands::Stop { socket, server_name }) => {
+        Some(Commands::Stop {}) => {
             run_stop(socket, server_name).await
         }
-        Some(Commands::Mcp { bind, socket, token, server_name }) => {
+        Some(Commands::Mcp { bind, token }) => {
             run_mcp(bind, socket, token, server_name).await
         }
         None => {
@@ -1044,7 +981,7 @@ async fn run_default(cli: Cli) -> Result<(), WshError> {
     tracing::info!("wsh starting");
 
     let server_name = &cli.server_name;
-    let socket_path = server::socket_path_for_instance(server_name);
+    let socket_path = resolve_socket_path(cli.socket.clone(), server_name);
 
     // Try connecting to an existing server; if none, spawn one.
     // Uses an advisory file lock to prevent two clients from racing to spawn
