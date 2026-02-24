@@ -18,6 +18,48 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default;
       in
       {
+        packages.default = let
+          webFrontend = pkgs.stdenvNoCC.mkDerivation {
+            pname = "wsh-web";
+            version = "0.1.0";
+            src = ./.;
+            nativeBuildInputs = [ pkgs.bun ];
+
+            # FOD: allows network access; hash must be updated when web/ changes
+            outputHashAlgo = "sha256";
+            outputHashMode = "recursive";
+            outputHash = "sha256-5Rd0a2td8Ej2pJsMZfSn3/vvtVAub1RFz9ZiarJ/Gjg=";
+
+            buildPhase = ''
+              export HOME=$TMPDIR
+              cd web
+              bun install --frozen-lockfile
+              bun run --bun node_modules/.bin/tsc
+              bun run --bun node_modules/.bin/vite build
+            '';
+
+            installPhase = ''
+              cp -r ../web-dist $out
+            '';
+          };
+        in pkgs.rustPlatform.buildRustPackage {
+          pname = "wsh";
+          version = "0.1.0";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+
+          preBuild = ''
+            cp -r ${webFrontend} web-dist
+          '';
+
+          WSH_SKIP_WEB_BUILD = "1";
+
+          # Tests that spawn a PTY need a real shell, which isn't
+          # available in the Nix build sandbox.
+          doCheck = false;
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rustToolchain
